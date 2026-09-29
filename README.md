@@ -1,5 +1,9 @@
 # s3vault
 
+[![build and release](https://github.com/jstdlee/s3vault/actions/workflows/build-release.yml/badge.svg)](https://github.com/jstdlee/s3vault/actions/workflows/build-release.yml)
+[![release](https://img.shields.io/github/v/release/jstdlee/s3vault?include_prereleases&sort=semver)](https://github.com/jstdlee/s3vault/releases)
+[![license: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
 Sync, browse and encrypt your files on **any S3-compatible storage**: Cloudflare R2, AWS S3, MinIO, Backblaze B2, Wasabi and others.
 
 - **Encryption:** each file can be encrypted with standard OpenPGP, using the `gpg` you already have.
@@ -249,6 +253,17 @@ Exporting the recovery key asks for the password again, and the file is written 
 - Previews, PDF rendering and the editor work in memory, and their buffers are wiped when closed.
 - Decrypted data reaches your disk only through what you ask for: **Download**, **Download all (decrypted)**, and syncing into your tracked folders.
 - Tracked-folder downloads go to a temp file next to the target and are renamed into place only after decryption and integrity checks succeed.
+
+## Download
+
+Prebuilt Linux binaries (x86_64 and arm64) are on the [Releases](https://github.com/jstdlee/s3vault/releases) page:
+- **Versioned releases** come from `v*` tags.
+- **Nightly** is rebuilt on every push to `main` by the [build and release](.github/workflows/build-release.yml) workflow, which compiles, runs the unit tests, packages and publishes.
+
+```bash
+tar xzf s3vault-*-linux-$(uname -m | sed 's/aarch64/arm64/').tar.gz
+cd s3vault-*/ && ./bin/s3vault          # GUI;  ./bin/s3vault-cli --help
+```
 
 ## Build
 
