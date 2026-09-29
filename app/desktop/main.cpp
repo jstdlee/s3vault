@@ -30,7 +30,7 @@ static ui::App* g_app = nullptr;
 
 // --script "step;step;…" drives the UI for screenshots and smoke tests without synthetic input:
 //   tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
-//   conflicts:all  compare  edit:<path>  upload:<local file>  browse:<files|folder|save>  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
+//   conflicts:all  compare  edit:<path>  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
 struct Script {
     std::vector<std::string> steps;
     size_t i = 0;
@@ -89,6 +89,13 @@ static std::string script_step(Script& s, ui::App& a) {
         } else if (cmd == "browse") {
             ui::BrowseMode m = arg == "folder" ? ui::BrowseMode::Folder : arg == "save" ? ui::BrowseMode::Save : ui::BrowseMode::OpenMany;
             ui::browse(a, m, "Script", [](std::vector<std::string>) {}, "example.txt");
+        } else if (cmd == "unlock") {
+            // Test-only: password from $S3VAULT_PASSWORD, never from the script text.
+            if (const char* pw = getenv("S3VAULT_PASSWORD"); pw && a.vault) {
+                OpResult r = a.vault->unlock(pw);
+                if (r.ok) a.modal.clear();
+                else fprintf(stderr, "script unlock: %s\n", r.error.c_str());
+            }
         } else if (cmd == "reconnect") {
             ui::connect_async(a);
         } else if (cmd == "compare") {
@@ -153,7 +160,6 @@ static void build_fonts() {
     if (!icons.empty()) {
         ImFontConfig m;
         m.MergeMode = true;
-        m.GlyphMinAdvanceX = 16.0f;
         io.Fonts->AddFontFromFileTTF(icons.c_str(), 0.0f, &m);
     }
 }
