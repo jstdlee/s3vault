@@ -70,11 +70,17 @@ std::vector<Transfer> Engine::transfers() {
     return v;
 }
 
-int Engine::transfer_begin(const std::string& what, const std::string& path, uint64_t total) {
+int Engine::transfer_begin(const std::string& what, const std::string& path, uint64_t total, bool queued) {
     std::lock_guard<std::mutex> lk(info_mu_);
     int id = next_transfer_++;
-    transfers_[id] = {what, path, 0, total};
+    transfers_[id] = {what, path, 0, total, queued};
     return id;
+}
+
+void Engine::transfer_start(int id) {
+    std::lock_guard<std::mutex> lk(info_mu_);
+    auto it = transfers_.find(id);
+    if (it != transfers_.end()) it->second.queued = false;
 }
 
 void Engine::transfer_progress(int id, uint64_t done, uint64_t total) {

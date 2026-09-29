@@ -225,6 +225,22 @@ OpResult Vault::verify_password(const std::string& password) {
     return same ? OpResult::success() : unlock(password);
 }
 
+OpResult Vault::key_file(std::string& out) {
+    if (!s3_) return OpResult::fail("not connected");
+    S3Result r = s3_->get_string(prefix_ + ".s3vault/key.gpg", out, 1 << 20);
+    if (r.not_found()) return OpResult::fail("this vault has no password/key yet");
+    if (!r.ok()) return OpResult::fail("read key.gpg: " + r.describe());
+    return OpResult::success();
+}
+
+OpResult Vault::recovery_key(const std::string& password, SecureString& out) {
+    OpResult v = verify_password(password);
+    if (!v.ok) return v;
+    out = keys_.get();
+    if (out.empty()) return OpResult::fail("vault key not loaded");
+    return OpResult::success();
+}
+
 bool Vault::try_unlock_from_keychain() {
     if (keys_.mode() != PassCache::Mode::Keychain) return false;
     SecureString s;
@@ -408,6 +424,25 @@ OpResult Vault::download_to(const std::string& key, const std::string& dest, con
     }
     res.ok = true;
     return res;
+}
+
+OpResult Vault::download_raw(const std::string& key, const std::string& dest) {
+    if (!s3_) return OpResult::fail("not connected");
+    mkdirs(path_dirname(dest));
+    std::string tmp = dest + ".s3v-tmp";
+    int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return OpResult::fail("cannot write " + tmp);
+    std::string etag;
+    S3Result r = s3_->get(key, [&](const char* p, size_t n) { return write_all_fd(fd, p, n); }, &etag);
+    fsync(fd);
+    close(fd);
+    if (!r.ok() || ::rename(tmp.c_str(), dest.c_str()) != 0) {
+        unlink(tmp.c_str());
+        return OpResult::fail("download " + key + ": " + r.describe());
+    }
+    OpResult ok = OpResult::success();
+    ok.etag = etag;
+    return ok;
 }
 
 OpResult Vault::download_to_memory(const std::string& key, std::string& out, size_t max) {

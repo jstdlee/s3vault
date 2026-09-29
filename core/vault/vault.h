@@ -87,6 +87,10 @@ public:
     // Checks a password without the network (against the key.gpg fetched at unlock). Used to unlock the
     // UI while the key stays loaded for background sync. Falls back to unlock() if nothing is cached.
     OpResult verify_password(const std::string& password);
+    // Key export. key_file(): the password-protected .s3vault/key.gpg (safe to store anywhere).
+    // recovery_key(): the raw vault key after re-checking the password; anyone holding it can decrypt the vault.
+    OpResult key_file(std::string& out);
+    OpResult recovery_key(const std::string& password, SecureString& out);
     // GUI: keep the vault key loaded until quit/forget, so sync continues while the window is locked.
     void keep_key_for_session() { keys_.configure(keys_.mode(), 0); }
     bool try_unlock_from_keychain();
@@ -108,6 +112,8 @@ public:
     // Writes to a temp file beside dest; `before_commit` may veto the final rename (return false).
     OpResult download_to(const std::string& key, const std::string& dest,
                          const std::function<bool()>& before_commit = {});
+    // Raw object copy (no decryption), for "download everything as stored".
+    OpResult download_raw(const std::string& key, const std::string& dest);
     OpResult download_to_memory(const std::string& key, std::string& out, size_t max);
 
     // ---- vault operations on logical paths ----

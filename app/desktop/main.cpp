@@ -94,6 +94,9 @@ static std::string script_step(Script& s, ui::App& a) {
             if (a.edits)
                 for (int id : a.edits->ids())
                     if (EditDoc* d = a.edits->doc(id)) d->text += arg;
+        } else if (cmd == "download-all") {  // download-all:<dir>|<decrypted|encrypted>
+            size_t bar = arg.find('|');
+            ui::download_all(a, arg.substr(0, bar), bar == std::string::npos || arg.substr(bar + 1) != "encrypted");
         } else if (cmd == "save") {
             ui::save_all_docs(a);
         } else if (cmd == "lock") {

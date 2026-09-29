@@ -8,7 +8,10 @@ Linux desktop app: C++17, Dear ImGui, GLFW, OpenGL 3.3. This is the same stack a
 
 - **Tracked folders.** Two-way, upload-only (backup) or download-only (mirror) sync. Local changes are picked up by inotify, with a periodic rescan as a safety net. The server is polled every 60 s. Each folder can have a `.s3vaultignore` file (gitignore syntax).
 - **Vault browser.** A tree of folders and files with type icons, sortable by name, type, size, last modified and sync status. You can filter by name or by type (text, images, PDF, encrypted).
-- **File operations.** Upload (built-in file browser with multi-select, or drag and drop; folders included), new folder, rename/move (a server-side copy, so nothing is re-uploaded), delete to the vault trash, restore, and download to a location you choose.
+- **File operations.** Upload (built-in file browser with multi-select, or drag and drop; folders included; shown as a queue with progress in Transfers, results in the activity log), new folder, rename/move (a server-side copy, so nothing is re-uploaded), delete to the vault trash (buttons in the details pane, F2 / Delete keys), restore, and download to a location you choose.
+- **Download all.** One click copies the whole vault to a folder, either **decrypted** (plain files) or **as stored** (encrypted `.gpg` files plus `.s3vault/key.gpg`, so the copy stays protected and opens later with your password and plain `gpg`).
+- **Keys & backup.** Export the password-protected key file, or the raw recovery key (asks for the password; copy or save with mode 600). The recovery key decrypts any file with `gpg -d` even if the password is forgotten.
+- **Tracked icon.** Tracked folders and their files carry a sync icon, and hovering shows the local path and direction. Status tooltips explain Synced / Pending / Server only / Not updated / Locked / Conflict / Cloud only.
 - **Preview on click only.** Supported types are text/code, images (png/jpg/gif/bmp/tga/psd) and PDF (one page at a time). Nothing is downloaded or decrypted until you ask. There are hard size limits. The plaintext is wiped when the preview closes, when you select something else, when the vault locks, or after 2 minutes idle.
 - **Built-in viewer and editor only.** Text, image and PDF previews and the text editor all run inside s3vault. Decrypted content stays in memory: it is never written to disk and never handed to another program (there is no "open with"). PDFs are piped to poppler through `fd://0`. The editor (Editor tab, Ctrl+S) saves back with `If-Match`. If the server copy changed since you opened it, you choose **Keep both / Overwrite server / Reload server version**. Closing with unsaved changes asks first.
 - **Conflicts.** A file changed on two devices, or changed on one and deleted on the other, is listed under **Conflicts**, grouped by tracked folder → parent folder → file. Checkboxes at every level let you apply **Keep both / Overwrite server / Overwrite local / Keep newest** to a whole group. **Compare** shows the two versions side by side.
@@ -125,7 +128,7 @@ Configuration lives in `~/.config/s3vault/config.ini` (secrets are never stored 
 ```
 s3vault-cli --help
   config show|get|set · secret set · deps · probe [--multipart]
-  init · passwd · lock · gen-password
+  init · passwd · lock · gen-password · export-key <file> [--recovery]
   roots · add-root <dir> [--remote P] [--direction D] [--plain] · rm-root · pause · resume
   sync · watch
   ls [dir] [--sort name|type|size|modified] [--reverse] [-r]

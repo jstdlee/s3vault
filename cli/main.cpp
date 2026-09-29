@@ -42,6 +42,7 @@ Vault
   init [--no-password]          create the vault (asks for a password)
   passwd                        set or change the vault password
   lock                          forget a remembered vault key (keychain mode)
+  export-key <file> [--recovery]  save key.gpg (password-protected), or the raw recovery key (mode 600)
   gen-password                  print a strong random password
 
 Tracked folders
@@ -363,6 +364,30 @@ int main(int argc, char** argv) {
         wipe(nw);
         if (!r.ok) return die(r.error);
         printf("Password %s. Files did not need re-encryption.\n", had ? "changed" : "set");
+        return 0;
+    }
+    if (cmd == "export-key") {
+        bool rec = has(a, "--recovery");
+        if (a.empty()) return die("usage: export-key <file> [--recovery]");
+        if (!rec) {
+            std::string ct;
+            OpResult r = v.key_file(ct);
+            if (!r.ok) return die(r.error);
+            if (!write_file_atomic(a[0], ct, 0600)) return die("cannot write " + a[0]);
+            printf("saved password-protected key file to %s\n", a[0].c_str());
+            return 0;
+        }
+        std::string pw = read_password("Vault password: ");
+        SecureString k;
+        OpResult r = v.recovery_key(pw, k);
+        wipe(pw);
+        if (!r.ok) return die(r.error);
+        std::string text = "s3vault recovery key (vault " + c.cfg.storage.bucket + "/" + v.prefix() + ")\n"
+                           "Decrypt any file:  gpg -d <file>.gpg   and use this as the passphrase:\n" + std::string(k.view()) + "\n";
+        bool ok = write_file_atomic(a[0], text, 0600);
+        wipe(text);
+        if (!ok) return die("cannot write " + a[0]);
+        fprintf(stderr, "saved the RECOVERY KEY to %s (mode 600). Anyone with it can decrypt this vault.\n", a[0].c_str());
         return 0;
     }
     if (cmd == "lock") {

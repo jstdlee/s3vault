@@ -32,7 +32,10 @@ struct Node {
     uint64_t size = 0;  // files: object size; folders: sum
     int64_t mtime = 0;  // files: LastModified; folders: newest child
     std::vector<std::unique_ptr<Node>> kids;
-    std::string status;  // "Synced", "Pending", "Conflict", "Cloud only", ""
+    std::string status;  // see status_help()
+    bool tracked = false;       // inside a tracked (auto-synced) folder
+    bool tracked_root = false;  // is the vault side of a tracked folder
+    std::string tracked_info;   // "~/Pictures · upload-only"
 };
 
 enum class PreviewState { Empty, Loading, Ready, Error };
@@ -185,6 +188,8 @@ void save_all_docs(App& a);
 void draw_settings_tab(App& a);
 void draw_modals(App& a);
 void start_uploads(App& a, const std::vector<std::string>& files);
+void download_all(App& a, const std::string& dest_parent, bool decrypt);
+void start_download_all(App& a, bool decrypt);
 // on_exists: 0 overwrite, 1 keep both, 2 skip
 void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, bool encrypt, int on_exists);
 void open_in_editor(App& a, const RemoteEntry& e);
@@ -192,6 +197,7 @@ const char* type_icon(const std::string& logical, bool dir, bool open);
 bool strength_meter(const char* pw, int min_len);
 
 const Node* find_node(const Node* n, const std::string& logical);
+const char* status_help(const std::string& status);
 
 // file_browser.cpp — built-in picker (external dialogs open behind the window on GNOME)
 enum class BrowseMode { OpenMany, Folder, Save };

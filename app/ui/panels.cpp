@@ -3,6 +3,9 @@
 #include <dirent.h>
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <cstring>
 #include <ctime>
 
@@ -69,13 +72,20 @@ void start_uploads(App& a, const std::vector<std::string>& files) {
 
 void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, bool encrypt, int on_exists) {
     auto v = a.vault;
-    a.run_job([&a, v, files, dest_dir, encrypt, on_exists] {
+    auto eng = a.engine;
+    int workers = std::max(1, std::min(4, a.cfg.sync.concurrency));
+    a.run_job([&a, v, eng, files, dest_dir, encrypt, on_exists, workers] {
         // Expand folders, keeping their structure under dest_dir.
-        std::vector<std::pair<std::string, std::string>> items;  // local, logical
+        struct Item {
+            std::string local, logical;
+            uint64_t size = 0;
+            int tid = 0;
+        };
+        std::vector<Item> items;
         std::function<void(const std::string&, const std::string&)> walk = [&](const std::string& p, const std::string& logical) {
             FileStat st = stat_path(p, true);
             if (st.is_file) {
-                items.push_back({p, logical});
+                items.push_back({p, logical, st.size, 0});
             } else if (st.is_dir) {
                 if (DIR* d = opendir(p.c_str())) {
                     while (dirent* e = readdir(d)) {
@@ -91,46 +101,145 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
             while (p.size() > 1 && p.back() == '/') p.pop_back();
             walk(p, join_logical(dest_dir, path_basename(p)));
         }
+        // Everything shows up in Transfers right away as "queued".
+        for (auto& it : items) it.tid = eng->transfer_begin("upload", it.logical, it.size, true);
+        eng->log("upload started: " + std::to_string(items.size()) + " file(s) → /" + dest_dir);
         std::vector<RemoteEntry> all;
         v->refresh(&all);
         std::map<std::string, RemoteEntry> by;
         for (auto& e : all)
             if (!e.dir_marker) by[e.logical] = e;
-        int ok = 0, skipped = 0, failed = 0;
+        std::atomic<int> ok{0}, skipped{0}, failed{0};
+        std::mutex err_mu;
         std::string last_err;
-        for (auto& [local, logical] : items) {
-            bool enc = encrypt || ends_with(logical, ".gpg");
-            Conditions c;
-            std::string key;
-            auto it = by.find(logical);
-            if (it != by.end()) {
-                if (on_exists == 2) { skipped++; continue; }
-                if (on_exists == 1) {
-                    std::string alt = Vault::conflict_name(logical, "uploaded");
-                    key = v->key_for(alt, enc);
-                    c.if_none_match = true;
-                } else {
-                    key = it->second.key;  // overwrite keeps the existing form
-                    c.if_match = it->second.etag;
+        std::atomic<size_t> next{0};
+        std::vector<std::thread> pool;
+        for (int w = 0; w < workers; w++) {
+            pool.emplace_back([&] {
+                for (size_t k; (k = next++) < items.size();) {
+                    Item& it = items[k];
+                    bool enc = encrypt || ends_with(it.logical, ".gpg");
+                    Conditions c;
+                    std::string key, shown = it.logical;
+                    auto ex = by.find(it.logical);
+                    if (ex != by.end()) {
+                        if (on_exists == 2) {
+                            skipped++;
+                            eng->transfer_end(it.tid);
+                            eng->log("skipped (already exists): " + it.logical);
+                            continue;
+                        }
+                        if (on_exists == 1) {
+                            shown = Vault::conflict_name(it.logical, "uploaded");
+                            key = v->key_for(shown, enc);
+                            c.if_none_match = true;
+                        } else {
+                            key = ex->second.key;  // overwrite keeps the existing form
+                            c.if_match = ex->second.etag;
+                        }
+                    } else {
+                        key = v->key_for(it.logical, enc);
+                        c.if_none_match = true;
+                    }
+                    eng->transfer_start(it.tid);
+                    OpResult r = v->upload_file(it.local, key, c, [&](uint64_t d, uint64_t t) { eng->transfer_progress(it.tid, d, t); });
+                    eng->transfer_end(it.tid);
+                    if (r.ok) {
+                        ok++;
+                        eng->log("uploaded " + shown + (ends_with(key, ".gpg") ? " (encrypted)" : ""));
+                    } else {
+                        failed++;
+                        eng->log("upload failed: " + it.logical + " (" + r.error + ")");
+                        std::lock_guard<std::mutex> lk(err_mu);
+                        last_err = r.error;
+                    }
                 }
-            } else {
-                key = v->key_for(logical, enc);
-                c.if_none_match = true;
-            }
-            OpResult r = v->upload_file(local, key, c);
-            if (r.ok) ok++;
-            else { failed++; last_err = r.error; }
+            });
         }
+        for (auto& t : pool) t.join();
         v->refresh();
-        a.post([&a, ok, skipped, failed, last_err] {
+        int nok = ok, nskip = skipped, nfail = failed;
+        a.post([&a, nok, nskip, nfail, last_err] {
             a.tree_dirty = true;
-            std::string m = "Uploaded " + std::to_string(ok) + " file(s)";
-            if (skipped) m += ", skipped " + std::to_string(skipped);
-            if (failed) m += ", " + std::to_string(failed) + " failed: " + last_err;
-            a.notify(m, failed > 0);
+            std::string m = "Uploaded " + std::to_string(nok) + " file(s)";
+            if (nskip) m += ", skipped " + std::to_string(nskip);
+            if (nfail) m += ", " + std::to_string(nfail) + " failed: " + last_err;
+            a.notify(m, nfail > 0);
             if (a.engine) a.engine->request_sync();
         });
     });
+}
+
+// Downloads the whole vault into <dest>/<bucket>-<prefix>-<date>/. decrypt=true: plain files (needs the key).
+// decrypt=false: objects exactly as stored (.gpg files + .s3vault/vault.json and key.gpg), so the copy stays
+// protected by the password / recovery key and can be decrypted later with plain gpg.
+void download_all(App& a, const std::string& dest_parent, bool decrypt) {
+    auto v = a.vault;
+    auto eng = a.engine;
+    int workers = std::max(1, std::min(4, a.cfg.sync.concurrency));
+    std::string pfx = a.cfg.storage.prefix;
+    for (auto& ch : pfx) if (ch == '/') ch = '-';
+    time_t t = time(nullptr);
+    struct tm tmv {};
+    localtime_r(&t, &tmv);
+    char ts[32];
+    strftime(ts, sizeof ts, "%Y%m%d-%H%M%S", &tmv);
+    std::string dest = dest_parent + "/" + a.cfg.storage.bucket + "-" + pfx + "-" + ts + (decrypt ? "" : "-encrypted");
+    a.run_job([&a, v, eng, dest, decrypt, workers] {
+        std::vector<RemoteEntry> all;
+        OpResult lr = v->refresh(&all);
+        if (!lr.ok) { a.post([&a, e = lr.error] { a.notify(e, true); }); return; }
+        struct Item { std::string key, out; uint64_t size; int tid; bool raw; };
+        std::vector<Item> items;
+        for (auto& e : all) {
+            if (e.dir_marker) { mkdirs(dest + "/" + e.logical); continue; }
+            if (decrypt) items.push_back({e.key, dest + "/" + e.logical, e.size, 0, false});
+            else items.push_back({e.key, dest + "/" + e.key.substr(v->prefix().size()), e.size, 0, true});
+        }
+        if (!decrypt)  // vault metadata: needed to open the encrypted copy later
+            for (const char* m : {".s3vault/vault.json", ".s3vault/key.gpg"})
+                items.push_back({v->prefix() + m, dest + "/" + m, 0, 0, true});
+        if (!mkdirs(dest, 0700)) { a.post([&a, dest] { a.notify("cannot create " + dest, true); }); return; }
+        for (auto& it : items) it.tid = eng->transfer_begin("download", it.out.substr(dest.size() + 1), it.size, true);
+        eng->log(std::string("download all (") + (decrypt ? "decrypted" : "encrypted, as stored") + "): " +
+                 std::to_string(items.size()) + " file(s) → " + dest);
+        std::atomic<size_t> next{0};
+        std::atomic<int> ok{0}, failed{0};
+        std::vector<std::thread> pool;
+        for (int w = 0; w < workers; w++)
+            pool.emplace_back([&] {
+                for (size_t k; (k = next++) < items.size();) {
+                    Item& it = items[k];
+                    eng->transfer_start(it.tid);
+                    OpResult r = it.raw ? v->download_raw(it.key, it.out) : v->download_to(it.key, it.out);
+                    eng->transfer_end(it.tid);
+                    if (r.ok) ok++;
+                    else {
+                        // key.gpg may not exist in a vault without password: not an error
+                        if (!ends_with(it.key, ".s3vault/key.gpg")) { failed++; eng->log("download failed: " + it.key + " (" + r.error + ")"); }
+                    }
+                }
+            });
+        for (auto& th : pool) th.join();
+        int nok = ok, nf = failed;
+        eng->log("download all finished: " + std::to_string(nok) + " ok, " + std::to_string(nf) + " failed → " + dest);
+        a.post([&a, nok, nf, dest] {
+            a.notify("Downloaded " + std::to_string(nok) + " file(s) to " + dest + (nf ? " — " + std::to_string(nf) + " failed (see Transfers)" : ""), nf > 0);
+        });
+    });
+}
+
+void start_download_all(App& a, bool decrypt) {
+    if (decrypt && a.vault_has_key && !a.vault->unlocked()) {
+        a.modal = "unlock";
+        return;
+    }
+    a.modal.clear();
+    browse(a, BrowseMode::Folder, decrypt ? "Download everything (decrypted) into…" : "Download everything (encrypted, as stored) into…",
+           [&a, decrypt](std::vector<std::string> d) {
+               download_all(a, d[0], decrypt);
+               a.want_tab = 3;  // show the queue
+           });
 }
 
 // Opens the file in the built-in editor (Edits tab). Decrypted text stays in memory only.
@@ -167,8 +276,12 @@ static void download_to_dialog(App& a, const RemoteEntry& e) {
     auto v = a.vault;
     browse(a, BrowseMode::Save, "Download " + path_basename(e.logical), [&a, v, e](std::vector<std::string> paths) {
         std::string dest = paths[0];
-        a.run_job([&a, v, e, dest] {
+        auto eng = a.engine;
+        a.run_job([&a, v, eng, e, dest] {
+            int tid = eng->transfer_begin("download", e.logical, e.size);
             OpResult r = v->download_to(e.key, dest);
+            eng->transfer_end(tid);
+            eng->log(r.ok ? "downloaded " + e.logical + " → " + dest : "download failed: " + e.logical + " (" + r.error + ")");
             a.post([&a, r, dest] { a.notify(r.ok ? "Saved " + dest : r.error, !r.ok); });
         });
     }, path_basename(e.logical));
@@ -216,7 +329,9 @@ static const char* status_icon(const std::string& s) {
     if (s == "Pending") return ICON_FA_ARROWS_ROTATE;
     if (s == "Conflict") return ICON_FA_TRIANGLE_EXCLAMATION;
     if (s == "Paused") return ICON_FA_CIRCLE_PAUSE;
-    if (s == "Cloud only") return ICON_FA_CLOUD;
+    if (s == "Cloud only" || s == "Server only" || s == "Not updated") return ICON_FA_CLOUD;
+    if (s == "Locked") return ICON_FA_LOCK;
+    if (s == "Local only") return ICON_FA_HARD_DRIVE;
     return "";
 }
 
@@ -241,6 +356,13 @@ static void draw_node(App& a, const Node& n) {
         if (!k.dir && k.entry.encrypted) {
             ImGui::SameLine();
             ImGui::TextDisabled(ICON_FA_LOCK);
+        }
+        if (k.tracked_root || (k.tracked && !k.dir)) {
+            // Auto-synced with a local folder: bright on the tracked folder itself, dim on its contents.
+            ImGui::SameLine();
+            if (k.tracked_root) ImGui::TextColored(kOk, ICON_FA_ARROWS_ROTATE);
+            else ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 0.55f), ICON_FA_ARROWS_ROTATE);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s: %s", k.tracked_root ? "Tracked folder" : "Kept in sync with", k.tracked_info.c_str());
         }
         if (clicked) {
             if (ImGui::GetIO().KeyCtrl) {
@@ -268,9 +390,14 @@ static void draw_node(App& a, const Node& n) {
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(format_local_time(k.mtime).c_str());
         ImGui::TableNextColumn();
-        if (!k.dir && !k.status.empty()) {
-            ImVec4 col = k.status == "Conflict" ? kWarn : k.status == "Synced" ? kOk : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        if (k.dir && k.tracked_root) {
+            ImGui::TextColored(kOk, ICON_FA_ARROWS_ROTATE " Tracked");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Kept in sync with %s", k.tracked_info.c_str());
+        } else if (!k.dir && !k.status.empty()) {
+            ImVec4 col = k.status == "Conflict" || k.status == "Locked" ? kWarn : k.status == "Synced" ? kOk
+                                                                                   : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
             ImGui::TextColored(col, "%s %s", status_icon(k.status), k.status.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", status_help(k.status));
         }
         if (k.dir && open) {
             draw_node(a, k);
@@ -290,9 +417,25 @@ static void details_pane(App& a) {
     ImGui::Text("%s %s", type_icon(n->logical, n->dir, false), n->name.c_str());
     ImGui::TextDisabled("/%s", n->logical.c_str());
     ImGui::Separator();
+    auto rename_delete = [&] {
+        if (ImGui::Button(ICON_FA_PEN " Rename / move…")) {
+            snprintf(a.text_buf, sizeof a.text_buf, "%s", n->logical.c_str());
+            a.modal_arg = n->logical;
+            a.modal = "rename";
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("F2");
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_TRASH " Delete…")) {
+            a.modal_arg = n->logical;
+            a.modal = "delete";
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete key · moves to the vault trash (restorable)");
+    };
+    if (n->tracked) ImGui::TextColored(kOk, ICON_FA_ARROWS_ROTATE " %s %s", n->tracked_root ? "Tracked folder:" : "Kept in sync with", n->tracked_info.c_str());
     if (n->dir) {
         ImGui::Text("Folder · %s", human_size(n->size).c_str());
         ImGui::Text("Last modified: %s", format_local_time(n->mtime).c_str());
+        rename_delete();
         return;
     }
     const RemoteEntry& e = n->entry;
@@ -309,7 +452,13 @@ static void details_pane(App& a) {
         row("Last modified", format_local_time(e.mtime));
         row("Encryption", e.encrypted ? "OpenPGP (gpg), vault key" : "none");
         row("Status", n->status);
+        if (ImGui::IsItemHovered() && status_help(n->status)[0]) ImGui::SetTooltip("%s", status_help(n->status));
         ImGui::EndTable();
+    }
+    if (status_help(n->status)[0]) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", status_help(n->status));
+        ImGui::PopStyleColor();
     }
     bool locked = e.encrypted && !a.vault->unlocked();
     PreviewKind pk = preview_kind(e.logical);
@@ -327,6 +476,7 @@ static void details_pane(App& a) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Built-in text editor; the decrypted text stays in memory");
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_DOWNLOAD " Download…")) download_to_dialog(a, e);
+    rename_delete();
     ImGui::Separator();
     draw_preview(a, n);
 }
@@ -357,6 +507,13 @@ void draw_vault_tab(App& a) {
             OpResult r = v->refresh();
             a.post([&a, r] { a.tree_dirty = true; if (!r.ok) a.notify(r.error, true); });
         });
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_DOWNLOAD " Download all…")) ImGui::OpenPopup("dlall");
+    if (ImGui::BeginPopup("dlall")) {
+        if (ImGui::MenuItem(ICON_FA_FILE "  Decrypted (plain files)")) start_download_all(a, true);
+        if (ImGui::MenuItem(ICON_FA_LOCK "  Encrypted, as stored (with key.gpg)")) start_download_all(a, false);
+        ImGui::EndPopup();
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(220);
@@ -412,7 +569,17 @@ void draw_vault_tab(App& a) {
             if (a.tree) draw_node(a, *a.tree);
             // Click on empty space (below the rows) or Esc: clear the selection → destination is the vault root.
             bool empty_click = ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered();
-            bool esc = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape);
+            bool tree_focus = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && !ImGui::IsAnyItemActive() && a.modal.empty();
+            bool esc = tree_focus && ImGui::IsKeyPressed(ImGuiKey_Escape);
+            if (tree_focus && !a.selected.empty() && ImGui::IsKeyPressed(ImGuiKey_F2)) {
+                snprintf(a.text_buf, sizeof a.text_buf, "%s", a.selected.c_str());
+                a.modal_arg = a.selected;
+                a.modal = "rename";
+            }
+            if (tree_focus && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+                if (!a.multi.empty()) a.modal = "delete-multi";
+                else if (!a.selected.empty()) { a.modal_arg = a.selected; a.modal = "delete"; }
+            }
             if (empty_click || esc) {
                 if (a.preview.state != PreviewState::Empty) preview_free(a);
                 a.selected.clear();
@@ -638,12 +805,23 @@ void draw_transfers_tab(App& a) {
     if (!a.engine) return;
     auto ts = a.engine->transfers();
     if (ts.empty()) ImGui::TextDisabled("No transfers running.");
-    for (auto& t : ts) {
+    size_t queued = 0;
+    for (auto& t : ts) queued += t.queued;
+    if (!ts.empty()) ImGui::Text("%zu active, %zu queued", ts.size() - queued, queued);
+    ImGui::BeginChild("xfers", ImVec2(0, ts.empty() ? 1.0f : std::min(360.0f, ImGui::GetContentRegionAvail().y * 0.55f)));
+    for (auto& t : ts) {  // active first, then the queue
+        if (t.queued) continue;
         float f = t.total ? float(double(t.done) / double(t.total)) : 0.0f;
         std::string lbl = human_size(t.done) + " / " + human_size(t.total);
         ImGui::Text("%s %s", t.what == "upload" ? ICON_FA_CLOUD_ARROW_UP : ICON_FA_CLOUD_ARROW_DOWN, t.path.c_str());
         ImGui::ProgressBar(f, ImVec2(-1, 0), lbl.c_str());
     }
+    for (auto& t : ts) {
+        if (!t.queued) continue;
+        ImGui::TextDisabled("%s %s · %s · queued", t.what == "upload" ? ICON_FA_CLOUD_ARROW_UP : ICON_FA_CLOUD_ARROW_DOWN,
+                            t.path.c_str(), human_size(t.total).c_str());
+    }
+    ImGui::EndChild();
     ImGui::Separator();
     ImGui::TextDisabled("Activity");
     ImGui::BeginChild("log", ImVec2(0, -1), ImGuiChildFlags_Borders);
@@ -737,7 +915,21 @@ void draw_settings_tab(App& a) {
         ImGui::EndDisabled();
         if (!a.probe_report.empty()) ImGui::TextUnformatted(a.probe_report.c_str());
     }
-    if (ImGui::CollapsingHeader("Dependencies", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader(ICON_FA_KEY " Keys & backup", ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool ready = a.conn == App::Conn::Ready;
+        ImGui::BeginDisabled(!ready || !a.vault_has_key);
+        if (ImGui::Button(ICON_FA_KEY " Export key…")) a.modal = "export-key";
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("password-protected key file, or the raw recovery key");
+        ImGui::BeginDisabled(!ready);
+        if (ImGui::Button(ICON_FA_DOWNLOAD " Download all (decrypted)…")) start_download_all(a, true);
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_LOCK " Download all (encrypted, as stored)…")) start_download_all(a, false);
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Encrypted copy = .gpg files + key.gpg: open it later with your password or recovery key and plain gpg.");
+    }
+    if (ImGui::CollapsingHeader("Dependencies")) {
         input_str("gpg", f.deps.gpg, 0, "auto");
         input_str("pdftoppm", f.deps.pdftoppm, 0, "auto");
         // Probed at most every 3 s (running `gpg --version` and PATH lookups every frame would stall the UI).
@@ -766,7 +958,6 @@ void draw_settings_tab(App& a) {
             dep_row("pdftoppm", d.pdf, d.pdf.empty() ? "PDF preview disabled (install poppler-utils)" : "PDF preview", !d.pdf.empty());
             dep_row("pdfinfo", d.info, "PDF page count", !d.info.empty());
             dep_row("keychain", d.keychain ? "Secret Service" : "", "S3 secret and remembered vault key", d.keychain);
-            dep_row("temp dir", d.tmp, d.in_ram ? "in RAM (tmpfs)" : "on disk: files are overwritten before deletion", d.in_ram);
             ImGui::EndTable();
         }
     }
@@ -1042,7 +1233,12 @@ void draw_modals(App& a) {
             while (!parent.empty() && (parent.front() == '/')) parent.erase(0, 1);
             while (!parent.empty() && (parent.back() == '/')) parent.pop_back();
             std::string path = join_logical(parent, trim(a.text_buf));
-            run_modal_job(a, [v, path] { OpResult r = v->mkdir(path); if (r.ok) v->refresh(); return r; },
+            auto eng = a.engine;
+            run_modal_job(a, [v, eng, path] {
+                OpResult r = v->mkdir(path);
+                if (r.ok) { v->refresh(); eng->log("created folder /" + path); }
+                return r;
+            },
                           [&a, path] { a.tree_dirty = true; a.force_open.insert(path_dirname(path)); });
         }
         ImGui::SameLine();
@@ -1060,7 +1256,12 @@ void draw_modals(App& a) {
         if ((ImGui::Button("Rename") || enter) && !a.modal_busy) {
             std::string from = a.modal_arg, to = trim(a.text_buf);
             while (!to.empty() && to.front() == '/') to.erase(0, 1);
-            run_modal_job(a, [v, from, to] { return v->rename(from, to); },
+            auto eng = a.engine;
+            run_modal_job(a, [v, eng, from, to] {
+                OpResult r = v->rename(from, to);
+                eng->log(r.ok ? "renamed /" + from + " → /" + to : "rename failed: /" + from + " (" + r.error + ")");
+                return r;
+            },
                           [&a, to] { a.selected = to; a.tree_dirty = true; if (a.engine) a.engine->request_sync(); });
         }
         ImGui::SameLine();
@@ -1081,9 +1282,11 @@ void draw_modals(App& a) {
         modal_error(a);
         ImGui::BeginDisabled(a.modal_busy);
         if (ImGui::Button(ICON_FA_TRASH " Delete")) {
-            run_modal_job(a, [v, targets] {
+            auto eng = a.engine;
+            run_modal_job(a, [v, eng, targets] {
                 for (auto& t : targets) {
                     OpResult r = v->remove(t);
+                    eng->log(r.ok ? "deleted /" + t + " (to vault trash)" : "delete failed: /" + t + " (" + r.error + ")");
                     if (!r.ok) return r;
                 }
                 return OpResult::success();
@@ -1227,6 +1430,77 @@ void draw_modals(App& a) {
             loaded_id = 0;
             close_modal(a);
         }
+        ImGui::EndPopup();
+    }
+
+    if (begin_modal(a, "export-key", "Export key")) {
+        ImGui::TextWrapped("Backup key file: .s3vault/key.gpg, still protected by your password. Safe to keep anywhere; "
+                           "with it and your password the vault can be opened even if the server copy is lost.");
+        ImGui::BeginDisabled(a.modal_busy);
+        if (ImGui::Button(ICON_FA_DOWNLOAD " Save backup key file…")) {
+            close_modal(a);  // the file browser takes over the popup slot
+            browse(a, BrowseMode::Save, "Save key file", [&a, v](std::vector<std::string> p) {
+                std::string dest = p[0];
+                a.run_job([&a, v, dest] {
+                    std::string ct;
+                    OpResult r = v->key_file(ct);
+                    if (r.ok && !write_file_atomic(dest, ct, 0600)) r = OpResult::fail("cannot write " + dest);
+                    a.post([&a, r, dest] { a.notify(r.ok ? "Saved key file to " + dest : r.error, !r.ok); });
+                });
+            }, "s3vault-" + a.cfg.storage.bucket + "-key.gpg");
+        }
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        ImGui::TextColored(kWarn, ICON_FA_TRIANGLE_EXCLAMATION " Recovery key (unprotected)");
+        ImGui::TextWrapped("The raw vault key. Anyone who has it can decrypt every file in this vault without your password "
+                           "(gpg -d file.gpg, then paste the key as the passphrase). Changing the password does NOT change it. "
+                           "Keep it offline, e.g. in a password manager or printed.");
+        ImGui::SetNextItemWidth(300);
+        ImGui::InputTextWithHint("##pwx", "Vault password", a.pw1, sizeof a.pw1, ImGuiInputTextFlags_Password);
+        modal_error(a);
+        ImGui::BeginDisabled(a.modal_busy || !a.pw1[0]);
+        auto get_key = [&](std::function<void(std::string)> use) {
+            std::string pw = a.pw1;
+            wipe_buf(a.pw1, sizeof a.pw1);
+            a.modal_busy = true;
+            a.run_job([&a, v, pw, use]() mutable {
+                SecureString k;
+                OpResult r = v->recovery_key(pw, k);
+                wipe(pw);
+                std::string key(k.view());
+                a.post([&a, r, key, use]() mutable {
+                    a.modal_busy = false;
+                    if (!r.ok) a.modal_error = r.error;
+                    else { a.modal_error.clear(); use(key); }
+                    wipe(key);
+                });
+            });
+        };
+        if (ImGui::Button("Copy recovery key")) {
+            get_key([&a](std::string k) {
+                glfwSetClipboardString(a.win, k.c_str());
+                a.notify("Recovery key copied: paste it into your password manager, then clear the clipboard");
+            });
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save recovery key…")) {
+            get_key([&a](std::string k) {
+                auto keep = std::make_shared<SecureString>(k);
+                a.modal.clear();  // hand the popup slot to the file browser
+                browse(a, BrowseMode::Save, "Save recovery key", [&a, keep](std::vector<std::string> p) {
+                    std::string text = "s3vault recovery key (vault " + a.cfg.storage.bucket + "/" + a.cfg.storage.prefix + ")\n"
+                                       "Decrypt any file:  gpg -d <file>.gpg   and use this as the passphrase:\n" +
+                                       std::string(keep->view()) + "\n";
+                    bool ok = write_file_atomic(p[0], text, 0600);
+                    wipe(text);
+                    a.notify(ok ? "Saved recovery key to " + p[0] + " (mode 600)" : "cannot write " + p[0], !ok);
+                }, "s3vault-recovery-key.txt");
+            });
+        }
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ImGui::Button("Close")) close_modal(a);
+        if (a.modal != "export-key") close_modal(a);
         ImGui::EndPopup();
     }
 

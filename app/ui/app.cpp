@@ -227,8 +227,21 @@ static bool passes_filter(const TreeParams& p, const RemoteEntry& e) {
     return true;
 }
 
+const char* status_help(const std::string& st) {
+    if (st == "Synced") return "The local copy in the tracked folder matches the server.";
+    if (st == "Pending") return "Changed on one side; the next sync pass will upload or download it.";
+    if (st == "Server only") return "Upload-only (backup) folder: files that exist only on the server are not downloaded.";
+    if (st == "Not updated") return "Upload-only (backup) folder: the server has a newer version that is not downloaded.";
+    if (st == "Local only") return "Download-only (mirror) folder: local changes are not uploaded.";
+    if (st == "Locked") return "Encrypted file waiting for sync: unlock the vault (the key is needed to encrypt/decrypt).";
+    if (st == "Conflict") return "Changed on two sides: see the Conflicts tab.";
+    if (st == "Paused") return "The tracked folder is paused (Tracked folders tab).";
+    if (st == "Cloud only") return "Not inside any tracked folder: stored in the vault only.";
+    return "";
+}
+
 // Sync status per logical path from the tracked roots' base rows and open conflicts.
-static std::map<std::string, std::string> compute_status(Db& db, const std::vector<RemoteEntry>& entries) {
+static std::map<std::string, std::string> compute_status(Db& db, const std::vector<RemoteEntry>& entries, bool unlocked) {
     std::map<std::string, std::string> out;
     auto roots = db.roots();
     std::map<int, std::map<std::string, FileRow>> files;
@@ -243,12 +256,18 @@ static std::map<std::string, std::string> compute_status(Db& db, const std::vect
         for (auto& r : roots) {
             std::string pfx = r.remote_prefix.empty() ? "" : r.remote_prefix + "/";
             if (!starts_with(e.logical, pfx)) continue;
-            std::string rel = e.logical.substr(pfx.size());
             auto& fm = files[r.id];
-            auto it = fm.find(rel);
-            st = r.paused ? "Paused"
-                 : it != fm.end() && it->second.base_etag == e.etag && it->second.l_hash == it->second.base_hash ? "Synced"
-                                                                                                                  : "Pending";
+            auto it = fm.find(e.logical.substr(pfx.size()));
+            bool have_base = it != fm.end() && !it->second.base_etag.empty();
+            bool remote_same = have_base && it->second.base_etag == e.etag;
+            bool local_same = have_base && it->second.l_hash == it->second.base_hash;
+            if (r.paused) st = "Paused";
+            else if (remote_same && local_same) st = "Synced";
+            else if (r.direction == "upload-only" && !have_base) st = "Server only";
+            else if (r.direction == "upload-only" && !remote_same && local_same) st = "Not updated";
+            else if (r.direction == "download-only" && remote_same && !local_same) st = "Local only";
+            else if (e.encrypted && !unlocked) st = "Locked";
+            else st = "Pending";
             break;
         }
         if (conflicted.count(e.logical)) st = "Conflict";
@@ -257,12 +276,22 @@ static std::map<std::string, std::string> compute_status(Db& db, const std::vect
     return out;
 }
 
+static void mark_tracked(Node* n, const std::vector<RootRow>& roots) {
+    for (auto& r : roots) {
+        std::string p = r.remote_prefix;
+        std::string info = r.local_path + " · " + r.direction + (r.paused ? " · paused" : "");
+        if (!n->logical.empty() && n->logical == p) { n->tracked_root = n->tracked = true; n->tracked_info = info; }
+        else if (p.empty() ? !n->logical.empty() : starts_with(n->logical, p + "/")) { n->tracked = true; n->tracked_info = info; }
+    }
+    for (auto& k : n->kids) mark_tracked(k.get(), roots);
+}
+
 static std::unique_ptr<Node> build_tree(Db& db, Vault* v, const TreeParams& p, std::map<std::string, std::string>& status) {
     auto root = std::make_unique<Node>();
     root->dir = true;
     if (!v) return root;
     auto entries = v->cached_entries();
-    status = compute_status(db, entries);
+    status = compute_status(db, entries, v->unlocked());
     bool filtering = !p.filter.empty() || p.type_filter;
     for (auto& e : entries) {
         if (!e.dir_marker && !passes_filter(p, e)) continue;
@@ -297,6 +326,7 @@ static std::unique_ptr<Node> build_tree(Db& db, Vault* v, const TreeParams& p, s
         prune(root.get());
     }
     finish(root.get(), p.sort_col, p.sort_desc);
+    mark_tracked(root.get(), db.roots());
     return root;
 }
 

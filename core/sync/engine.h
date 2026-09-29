@@ -34,9 +34,10 @@ struct SyncReport {
 };
 
 struct Transfer {
-    std::string what;  // "upload", "download", "check"
+    std::string what;  // "upload", "download", "compare"
     std::string path;
     uint64_t done = 0, total = 0;
+    bool queued = false;  // waiting for its turn
 };
 
 class Engine {
@@ -66,6 +67,11 @@ public:
     std::vector<Transfer> transfers();
     std::vector<std::string> log_lines(size_t max = 200);
     void log(const std::string& line);
+    // Transfers shown in the UI (also used for manual uploads/downloads started from the UI).
+    int transfer_begin(const std::string& what, const std::string& path, uint64_t total, bool queued = false);
+    void transfer_start(int id);
+    void transfer_progress(int id, uint64_t done, uint64_t total);
+    void transfer_end(int id);
     // Called (from the engine thread) after each sync pass.
     std::function<void()> on_synced;
 
@@ -80,9 +86,6 @@ private:
     ConflictRow make_conflict(const RootRow& root, const PlanInput& in, const std::string& rel, const std::string& kind);
     bool local_unchanged(const std::string& abs, const LocalFile* planned);
     void loop();
-    int transfer_begin(const std::string& what, const std::string& path, uint64_t total);
-    void transfer_progress(int id, uint64_t done, uint64_t total);
-    void transfer_end(int id);
 
     Config& cfg_;
     Db& db_;
