@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=s3vault
+Comment=Sync and encrypt files with S3-compatible storage (Cloudflare R2, AWS S3, MinIO…)
+Exec=s3vault
+Icon=folder-remote
+Terminal=false
+Categories=Utility;FileTools;Network;
