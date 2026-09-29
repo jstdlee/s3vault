@@ -64,48 +64,70 @@ static bool storage_configured(const Config& c) {
            (c.storage.provider != "r2" || !c.storage.account_id.empty() || c.storage.endpoint != "auto");
 }
 
-void connect_async(App& a) {
-    if (a.engine) a.engine->stop();
-    a.join_jobs();  // nothing may still hold the old vault
+// Drops the current session without waiting: its engine stops (aborting transfers) on a worker thread,
+// and it is destroyed once the last background job holding it finishes.
+static void retire_session(App& a) {
     preview_free(a);
     if (a.edits) a.edits->close_all();
+    auto old = a.sess;
+    a.vault.reset();
+    a.engine.reset();
+    a.edits.reset();
+    a.sess.reset();
+    if (old) std::thread([old]() mutable { if (old->engine) old->engine->stop(); old.reset(); }).detach();
+}
+
+void connect_async(App& a) {
+    retire_session(a);
+    a.tree.reset();
+    a.status_by_logical.clear();
+    a.selected.clear();
+    a.multi.clear();
     if (!storage_configured(a.cfg)) {
         a.conn = App::Conn::Unconfigured;
         a.want_tab = 5;
         return;
     }
     a.conn = App::Conn::Connecting;
-    a.vault = std::make_unique<Vault>(a.cfg, a.db);
-    a.engine = std::make_unique<Engine>(a.cfg, a.db, *a.vault);
-    a.edits = std::make_unique<EditManager>(a.cfg, *a.vault);
+    auto s = std::make_shared<Session>();
+    s->cfg = a.cfg;  // the session works on its own copy; Settings edits never race with a running sync
+    s->vault = std::make_unique<Vault>(s->cfg, a.db);
+    s->engine = std::make_unique<Engine>(s->cfg, a.db, *s->vault);
+    s->edits = std::make_unique<EditManager>(s->cfg, *s->vault);
+    a.sess = s;
+    a.vault = std::shared_ptr<Vault>(s, s->vault.get());
+    a.engine = std::shared_ptr<Engine>(s, s->engine.get());
+    a.edits = std::shared_ptr<EditManager>(s, s->edits.get());
     a.engine->on_synced = [&a] { a.post([&a] { a.tree_dirty = true; }); };
-    Vault* v = a.vault.get();
-    a.run_job([&a, v] {
+    a.run_job([&a, s] {
+        Vault* v = s->vault.get();
         std::string err;
+        auto still_current = [&a, s] { return a.sess == s; };
         if (!v->connect(err)) {
-            a.post([&a, err] { a.conn = App::Conn::Error; a.conn_error = err; a.want_tab = 5; });
+            a.post([&a, err, still_current] { if (!still_current()) return; a.conn = App::Conn::Error; a.conn_error = err; a.want_tab = 5; });
             return;
         }
         bool exists = false;
         OpResult r = v->load_info(exists);
         if (!r.ok) {
-            a.post([&a, e = r.error] { a.conn = App::Conn::Error; a.conn_error = e; });
+            a.post([&a, e = r.error, still_current] { if (!still_current()) return; a.conn = App::Conn::Error; a.conn_error = e; });
             return;
         }
         if (!exists) {
-            a.post([&a] { a.conn = App::Conn::NoVault; a.modal = "create-vault"; });
+            a.post([&a, still_current] { if (!still_current()) return; a.conn = App::Conn::NoVault; a.modal = "create-vault"; });
             return;
         }
         bool key = v->has_key();
         if (key) v->try_unlock_from_keychain();
         v->refresh();
-        a.post([&a, key] {
+        a.post([&a, key, still_current] {
+            if (!still_current()) return;
             a.vault_has_key = key;
             a.conn = App::Conn::Ready;
             a.tree_dirty = true;
             a.upload_encrypt = key;
             if (key && !a.vault->unlocked()) a.modal = "unlock";
-            a.engine->start();
+            a.engine->start();  // returns immediately; watches and syncs run on the engine's threads
         });
     });
 }
@@ -137,7 +159,8 @@ void lock_vault(App& a, bool manual) {
 }
 
 void app_shutdown(App& a) {
-    if (a.engine) a.engine->stop();
+    if (a.engine) a.engine->stop();  // aborts transfers in flight, so quitting is quick
+    if (a.vault && a.vault->connected()) a.vault->s3().cancel = true;
     preview_free(a);
     if (a.edits) a.edits->close_all();
     a.join_jobs();
@@ -179,12 +202,16 @@ static void finish(Node* n, int col, bool desc) {
     });
 }
 
-static bool passes_filter(App& a, const RemoteEntry& e) {
-    if (a.filter[0]) {
-        std::string f = to_lower(a.filter);
-        if (to_lower(e.logical).find(f) == std::string::npos) return false;
-    }
-    switch (a.type_filter) {
+struct TreeParams {
+    std::string filter;  // lower-case
+    int type_filter = 0;
+    int sort_col = 0;
+    bool sort_desc = false;
+};
+
+static bool passes_filter(const TreeParams& p, const RemoteEntry& e) {
+    if (!p.filter.empty() && to_lower(e.logical).find(p.filter) == std::string::npos) return false;
+    switch (p.type_filter) {
         case 1: return preview_kind(e.logical) == PreviewKind::Text;
         case 2: return preview_kind(e.logical) == PreviewKind::Image;
         case 3: return preview_kind(e.logical) == PreviewKind::Pdf;
@@ -194,13 +221,13 @@ static bool passes_filter(App& a, const RemoteEntry& e) {
 }
 
 // Sync status per logical path from the tracked roots' base rows and open conflicts.
-static void compute_status(App& a, const std::vector<RemoteEntry>& entries) {
-    a.status_by_logical.clear();
-    auto roots = a.db.roots();
+static std::map<std::string, std::string> compute_status(Db& db, const std::vector<RemoteEntry>& entries) {
+    std::map<std::string, std::string> out;
+    auto roots = db.roots();
     std::map<int, std::map<std::string, FileRow>> files;
-    for (auto& r : roots) files[r.id] = a.db.files(r.id);
+    for (auto& r : roots) files[r.id] = db.files(r.id);
     std::set<std::string> conflicted;
-    for (auto& c : a.db.conflicts())
+    for (auto& c : db.conflicts())
         for (auto& r : roots)
             if (r.id == c.root_id) conflicted.insert(r.remote_prefix.empty() ? c.rel : r.remote_prefix + "/" + c.rel);
     for (auto& e : entries) {
@@ -212,27 +239,26 @@ static void compute_status(App& a, const std::vector<RemoteEntry>& entries) {
             std::string rel = e.logical.substr(pfx.size());
             auto& fm = files[r.id];
             auto it = fm.find(rel);
-            st = r.paused ? "Paused" : it != fm.end() && it->second.base_etag == e.etag && it->second.l_hash == it->second.base_hash ? "Synced" : "Pending";
+            st = r.paused ? "Paused"
+                 : it != fm.end() && it->second.base_etag == e.etag && it->second.l_hash == it->second.base_hash ? "Synced"
+                                                                                                                  : "Pending";
             break;
         }
         if (conflicted.count(e.logical)) st = "Conflict";
-        a.status_by_logical[e.logical] = st;
+        out[e.logical] = st;
     }
+    return out;
 }
 
-void rebuild_tree(App& a) {
-    a.tree_dirty = false;
+static std::unique_ptr<Node> build_tree(Db& db, Vault* v, const TreeParams& p, std::map<std::string, std::string>& status) {
     auto root = std::make_unique<Node>();
     root->dir = true;
-    if (!a.vault) {
-        a.tree = std::move(root);
-        return;
-    }
-    auto entries = a.vault->cached_entries();
-    a.db.remote_cache(&a.listed_at);
-    compute_status(a, entries);
+    if (!v) return root;
+    auto entries = v->cached_entries();
+    status = compute_status(db, entries);
+    bool filtering = !p.filter.empty() || p.type_filter;
     for (auto& e : entries) {
-        if (!e.dir_marker && !passes_filter(a, e)) continue;
+        if (!e.dir_marker && !passes_filter(p, e)) continue;
         auto parts = split(e.logical, '/');
         Node* cur = root.get();
         std::string path;
@@ -242,7 +268,6 @@ void rebuild_tree(App& a) {
             cur = child_dir(cur, parts[i], path);
         }
         if (e.dir_marker) {
-            if (a.filter[0] || a.type_filter) continue;
             cur->mtime = std::max(cur->mtime, e.mtime);
             continue;
         }
@@ -252,19 +277,49 @@ void rebuild_tree(App& a) {
         n->entry = e;
         n->size = e.size;
         n->mtime = e.mtime;
-        n->status = a.status_by_logical[e.logical];
+        n->status = status[e.logical];
         cur->kids.push_back(std::move(n));
     }
-    // With a filter active, drop folders left empty.
-    std::function<bool(Node*)> prune = [&](Node* n) {
-        n->kids.erase(std::remove_if(n->kids.begin(), n->kids.end(),
-                                     [&](std::unique_ptr<Node>& k) { return k->dir && !prune(k.get()) && (a.filter[0] || a.type_filter); }),
-                      n->kids.end());
-        return !n->kids.empty();
-    };
-    prune(root.get());
-    finish(root.get(), a.sort_col, a.sort_desc);
-    a.tree = std::move(root);
+    if (filtering) {  // drop folders left empty by the filter
+        std::function<bool(Node*)> prune = [&](Node* n) {
+            n->kids.erase(std::remove_if(n->kids.begin(), n->kids.end(),
+                                         [&](std::unique_ptr<Node>& k) { return k->dir && !prune(k.get()); }),
+                          n->kids.end());
+            return !n->kids.empty();
+        };
+        prune(root.get());
+    }
+    finish(root.get(), p.sort_col, p.sort_desc);
+    return root;
+}
+
+// Builds the tree on a worker thread (the listing can be large) and swaps it in when done.
+void rebuild_tree(App& a) {
+    a.tree_dirty = false;
+    uint64_t gen = ++a.tree_gen;
+    TreeParams p{to_lower(a.filter), a.type_filter, a.sort_col, a.sort_desc};
+    auto v = a.vault;
+    a.tree_building = true;
+    a.run_job([&a, v, p, gen] {
+        std::map<std::string, std::string> status;
+        auto holder = std::make_shared<std::unique_ptr<Node>>(build_tree(a.db, v.get(), p, status));
+        auto st = std::make_shared<std::map<std::string, std::string>>(std::move(status));
+        a.post([&a, gen, holder, st] {
+            if (gen != a.tree_gen) return;  // a newer rebuild was requested meanwhile
+            a.tree = std::move(*holder);
+            a.status_by_logical = std::move(*st);
+            a.tree_building = false;
+        });
+    });
+}
+
+const Node* find_node(const Node* n, const std::string& logical) {
+    if (!n) return nullptr;
+    if (n->logical == logical) return n;
+    for (auto& k : n->kids)
+        if (k->dir ? starts_with(logical, k->logical + "/") || k->logical == logical : k->logical == logical)
+            if (const Node* f = find_node(k.get(), logical)) return f;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +371,7 @@ static void toolbar(App& a) {
 
 void app_frame(App& a) {
     a.drain_ui_queue();
-    if (a.tree_dirty) rebuild_tree(a);
+    if (a.tree_dirty && a.conn == App::Conn::Ready) rebuild_tree(a);
 
     // Idle lock: user input counts as activity.
     if (a.vault && a.vault->unlocked() && a.had_input) {
@@ -373,6 +428,7 @@ void app_frame(App& a) {
     ImGui::End();
 
     draw_modals(a);
+    draw_file_browser(a);
 
     // Toast
     if (!a.toast.text.empty() && glfwGetTime() < a.toast.until) {

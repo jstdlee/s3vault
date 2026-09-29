@@ -66,13 +66,30 @@ struct Toast {
     double until = 0;
 };
 
+// One connection: its own Config snapshot + vault + engine + edit sessions. Background jobs hold a
+// shared_ptr to it, so reconnecting never has to wait for them (the old session dies with its last job).
+struct Session {
+    Config cfg;
+    std::unique_ptr<Vault> vault;
+    std::unique_ptr<Engine> engine;
+    std::unique_ptr<EditManager> edits;
+    ~Session() {
+        if (engine) engine->stop();
+        engine.reset();
+        edits.reset();
+        vault.reset();
+    }
+};
+
 struct App {
     GLFWwindow* win = nullptr;
     Config cfg;
     Db db;
-    std::unique_ptr<Vault> vault;
-    std::unique_ptr<Engine> engine;
-    std::unique_ptr<EditManager> edits;
+    std::shared_ptr<Session> sess;
+    // Aliases into `sess` (keep the session alive while held).
+    std::shared_ptr<Vault> vault;
+    std::shared_ptr<Engine> engine;
+    std::shared_ptr<EditManager> edits;
 
     // Connection / vault state (set by background jobs)
     enum class Conn { Unconfigured, Connecting, Error, NoVault, Ready };
@@ -91,6 +108,8 @@ struct App {
     int type_filter = 0;  // 0 all, 1 text, 2 images, 3 pdf, 4 encrypted
     bool tree_dirty = true;
     int64_t listed_at = 0;
+    uint64_t tree_gen = 0;      // bumps per rebuild request; stale background builds are dropped
+    bool tree_building = false;
     std::map<std::string, std::string> status_by_logical;
     std::set<std::string> force_open;  // folders opened programmatically (--script expand:)
 
@@ -163,6 +182,14 @@ void open_in_editor(App& a, const RemoteEntry& e, bool force);
 void open_externally(App& a, const RemoteEntry& e);
 const char* type_icon(const std::string& logical, bool dir, bool open);
 bool strength_meter(const char* pw, int min_len);
+
+const Node* find_node(const Node* n, const std::string& logical);
+
+// file_browser.cpp — built-in picker (external dialogs open behind the window on GNOME)
+enum class BrowseMode { OpenMany, Folder, Save };
+void browse(App& a, BrowseMode mode, const std::string& title, std::function<void(std::vector<std::string>)> on_ok,
+            const std::string& suggested_name = "");
+void draw_file_browser(App& a);
 
 // preview_view.cpp
 void preview_load(App& a, const RemoteEntry& e);

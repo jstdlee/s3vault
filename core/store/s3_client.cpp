@@ -88,6 +88,8 @@ struct S3Client::Req {
     size_t delivered = 0;
     bool aborted = false;
     std::function<void(uint64_t)> on_upload;
+    std::atomic<bool>* cancel = nullptr;
+    bool no_cancel = false;  // cleanup requests (abort multipart) must still go out after a cancel
 };
 
 namespace {
@@ -130,6 +132,11 @@ static size_t write_cb(char* p, size_t sz, size_t n, void* ud) {
     return len;
 }
 
+static int progress_cb(void* ud, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    auto* r = static_cast<S3Client::Req*>(ud);
+    return r->cancel && r->cancel->load() ? 1 : 0;  // non-zero aborts the transfer
+}
+
 static size_t header_cb(char* p, size_t sz, size_t n, void* ud) {
     auto* r = static_cast<S3Client::Req*>(ud);
     std::string line(p, sz * n);
@@ -162,6 +169,7 @@ static void parse_error(const std::string& body, S3Result& res) {
 
 S3Result S3Client::perform(Req& r) {
     S3Result res;
+    if (!r.no_cancel) r.cancel = &cancel;
     const char* why = nullptr;
     const CurlApi* c = curl_api(&why);
     if (!c) { res.code = why; return res; }
@@ -203,6 +211,9 @@ S3Result S3Client::perform(Req& r) {
         c->easy_setopt(h, CURLOPT_WRITEDATA, &r);
         c->easy_setopt(h, CURLOPT_HEADERFUNCTION, header_cb);
         c->easy_setopt(h, CURLOPT_HEADERDATA, &r);
+        c->easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+        c->easy_setopt(h, CURLOPT_XFERINFOFUNCTION, progress_cb);
+        c->easy_setopt(h, CURLOPT_XFERINFODATA, &r);
         if (max_bytes_per_sec > 0) {
             c->easy_setopt(h, CURLOPT_MAX_SEND_SPEED_LARGE, curl_off_t(max_bytes_per_sec));
             c->easy_setopt(h, CURLOPT_MAX_RECV_SPEED_LARGE, curl_off_t(max_bytes_per_sec));
@@ -237,6 +248,11 @@ S3Result S3Client::perform(Req& r) {
         if (r.aborted) {
             res.http = 0;
             res.code = "Aborted";
+            return res;
+        }
+        if (r.cancel && *r.cancel) {
+            res.http = 0;
+            res.code = "Cancelled";
             return res;
         }
         if (cc != CURLE_OK) res.code = c->easy_strerror(cc);
@@ -393,6 +409,7 @@ S3Result S3Client::put_multipart(const std::string& key, const std::string& path
     }
     auto abort = [&] {
         Req a;
+        a.no_cancel = true;
         a.method = "DELETE";
         a.key = key;
         a.query["uploadId"] = upload_id;

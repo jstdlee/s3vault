@@ -644,9 +644,11 @@ void Engine::start() {
     stop_ = false;
     running_ = true;
     watcher_ = new platform::FsWatcher();
-    for (auto& r : db_.roots())
-        if (!r.paused) watcher_->add_root(r.id, r.local_path);
     watch_thread_ = std::thread([this] {
+        // Adding recursive inotify watches can take a while on big trees: do it here, not on the caller's thread.
+        for (auto& r : db_.roots())
+            if (!r.paused && !stop_) watcher_->add_root(r.id, r.local_path);
+        watches_ready_ = true;
         auto last_event = std::chrono::steady_clock::time_point{};
         bool pending = false;
         while (!stop_) {
@@ -672,9 +674,11 @@ void Engine::start() {
 void Engine::stop() {
     if (!running_) return;
     stop_ = true;
+    if (vault_.connected()) vault_.s3().cancel = true;  // abort uploads/downloads in flight
     wake_.notify_all();
     if (thread_.joinable()) thread_.join();
     if (watch_thread_.joinable()) watch_thread_.join();
+    if (vault_.connected()) vault_.s3().cancel = false;
     delete watcher_;
     watcher_ = nullptr;
     running_ = false;
@@ -690,9 +694,9 @@ void Engine::loop() {
             wake_.wait_until(lk, next_poll, [this] { return stop_ || want_sync_; });
         }
         if (stop_) break;
-        // New roots added from the UI need watches.
+        // New roots added from the UI need watches (once the initial ones are in place).
         auto roots = db_.roots();
-        if (roots.size() != known_roots) {
+        if (watches_ready_ && roots.size() != known_roots) {
             for (auto& r : roots) {
                 watcher_->remove_root(r.id);
                 if (!r.paused) watcher_->add_root(r.id, r.local_path);

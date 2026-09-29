@@ -8,7 +8,7 @@ Linux desktop app: C++17, Dear ImGui, GLFW, OpenGL 3.3. This is the same stack a
 
 - **Tracked folders.** Two-way, upload-only (backup) or download-only (mirror) sync. Local changes are picked up by inotify, with a periodic rescan as a safety net. The server is polled every 60 s. Each folder can have a `.s3vaultignore` file (gitignore syntax).
 - **Vault browser.** A tree of folders and files with type icons, sortable by name, type, size, last modified and sync status. You can filter by name or by type (text, images, PDF, encrypted).
-- **File operations.** Upload (picker or drag and drop, folders included), new folder, rename/move (a server-side copy, so nothing is re-uploaded), delete to the vault trash, restore, and download to a location you choose.
+- **File operations.** Upload (built-in file browser with multi-select, or drag and drop; folders included), new folder, rename/move (a server-side copy, so nothing is re-uploaded), delete to the vault trash, restore, and download to a location you choose.
 - **Preview on click only.** Supported types are text/code, images (png/jpg/gif/bmp/tga/psd) and PDF (one page at a time). Nothing is downloaded or decrypted until you ask. There are hard size limits. The plaintext is wiped when the preview closes, when you select something else, when the vault locks, or after 2 minutes idle.
 - **Edit in your text editor.** The file is decrypted to RAM (tmpfs) and opened in `$VISUAL`, `$EDITOR` or the desktop default. **Force open** also works for non-text files. On the first real change you get a prompt: **Save back / Keep editing / Discard**. If the server copy changed since you opened it, you choose **Keep both / Overwrite server / Reload server version**.
 - **Conflicts.** A file changed on two devices, or changed on one and deleted on the other, is listed under **Conflicts**, grouped by tracked folder → parent folder → file. Checkboxes at every level let you apply **Keep both / Overwrite server / Overwrite local / Keep newest** to a whole group. **Compare** shows the two versions side by side.
@@ -98,7 +98,7 @@ Decrypted copies for editing, opening in another app, and PDF pages live in `$XD
 
 **Runtime libraries**
 - libcurl and libsecret are loaded at runtime, so the build needs no `-dev` packages.
-- The runtime needs `libcurl4`, `gnupg` ≥ 2.2, and optionally `poppler-utils` (PDF preview), `zenity` or `kdialog` (file pickers) and a Secret Service keyring.
+- The runtime needs `libcurl4`, `gnupg` ≥ 2.2, and optionally `poppler-utils` (PDF preview) and a Secret Service keyring. File and folder pickers are built in: external dialogs such as zenity open behind the window on GNOME.
 
 Install to `~/.local`:
 ```bash
@@ -162,6 +162,7 @@ tests/r2_integration.sh        # end-to-end against a real bucket, two simulated
 
 **GUI smoke test**
 - `s3vault --script "idle;expand:Docs;select:Docs/a.png;preview;idle;shot:/tmp/a.png;quit"` drives the UI without synthetic input and saves screenshots.
+- On exit, script mode prints the slowest UI frame. All network, crypto, listing and tree building runs on worker threads: syncing 360 MB kept every frame under 100 ms, and reconnecting or quitting mid-upload aborts transfers instead of waiting.
 
 ## Source layout
 

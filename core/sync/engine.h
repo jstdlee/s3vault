@@ -89,7 +89,7 @@ private:
     Vault& vault_;
     std::mutex sync_mu_;  // one sync/resolve at a time
 
-    std::atomic<bool> running_{false}, syncing_{false}, stop_{false}, want_sync_{false}, want_rescan_{false};
+    std::atomic<bool> running_{false}, syncing_{false}, stop_{false}, want_sync_{false}, want_rescan_{false}, watches_ready_{false};
     std::atomic<int64_t> last_sync_{0};
     std::thread thread_, watch_thread_;
     std::mutex wake_mu_;

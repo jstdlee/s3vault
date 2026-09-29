@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -29,7 +30,7 @@ static ui::App* g_app = nullptr;
 
 // --script "step;step;…" drives the UI for screenshots and smoke tests without synthetic input:
 //   tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
-//   conflicts:all  compare  edit:<path>  upload:<local file>  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
+//   conflicts:all  compare  edit:<path>  upload:<local file>  browse:<files|folder|save>  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
 struct Script {
     std::vector<std::string> steps;
     size_t i = 0;
@@ -85,6 +86,11 @@ static std::string script_step(Script& s, ui::App& a) {
                 if (e.logical == arg && !e.dir_marker) ui::open_in_editor(a, e, true);
         } else if (cmd == "upload") {
             ui::upload_files(a, {arg}, a.current_dir, a.vault_has_key, 1);
+        } else if (cmd == "browse") {
+            ui::BrowseMode m = arg == "folder" ? ui::BrowseMode::Folder : arg == "save" ? ui::BrowseMode::Save : ui::BrowseMode::OpenMany;
+            ui::browse(a, m, "Script", [](std::vector<std::string>) {}, "example.txt");
+        } else if (cmd == "reconnect") {
+            ui::connect_async(a);
         } else if (cmd == "compare") {
             auto list = a.db.conflicts();
             if (!list.empty()) { a.modal_arg = std::to_string(list[0].id); a.modal = "compare"; }
@@ -232,6 +238,9 @@ int main(int argc, char** argv) {
 
     ui::app_init(app);
 
+    // Script mode reports the slowest frame (UI-thread stalls) on exit.
+    double worst_frame = 0, prev_frame = -1;
+    int slow_frames = 0;
     while (!glfwWindowShouldClose(app.win) && !app.quit_confirmed) {
         bool active = !script.steps.empty() || app.busy > 0 || (app.engine && (app.engine->syncing() || !app.engine->transfers().empty())) ||
                       app.preview.state == ui::PreviewState::Loading;
@@ -246,6 +255,7 @@ int main(int argc, char** argv) {
             app.had_input = true;
         }
         std::string shot = script.steps.empty() ? "" : script_step(script, app);
+        double t_frame = glfwGetTime();
         ui::app_frame(app);
         ImGui::Render();
         int w, h;
@@ -261,8 +271,16 @@ int main(int argc, char** argv) {
             else { settle = 0; if (!save_png(app.win, shot)) fprintf(stderr, "cannot write %s\n", shot.c_str()); }
         }
         glfwSwapBuffers(app.win);
+        double took = glfwGetTime() - t_frame;  // work done on the UI thread this frame (excludes waiting for events)
+        if (prev_frame >= 0) {
+            worst_frame = std::max(worst_frame, took);
+            if (took > 0.1) slow_frames++;
+        }
+        prev_frame = t_frame;
         if (app.quit_requested && app.quit_confirmed) break;
     }
+    if (!script.steps.empty())
+        fprintf(stderr, "ui-thread: slowest frame %.1f ms, frames over 100 ms: %d\n", worst_frame * 1000, slow_frames);
     glfwGetWindowSize(app.win, &app.cfg.ui.width, &app.cfg.ui.height);
     ui::app_shutdown(app);
     ImGui_ImplOpenGL3_Shutdown();

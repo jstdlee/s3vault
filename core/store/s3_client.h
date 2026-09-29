@@ -1,5 +1,6 @@
 // Minimal S3 API client: enough for s3vault (list/head/get/put/copy/delete/multipart, conditional writes).
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -67,6 +68,8 @@ public:
     S3Result del(const std::string& key);
 
     uint64_t multipart_threshold = 64ull << 20;
+    // Set to abort every transfer in flight on this client (they fail with code "Cancelled").
+    std::atomic<bool> cancel{false};
     int64_t max_bytes_per_sec = 0;  // 0 = unlimited (per transfer)
     const S3Endpoint& endpoint() const { return ep_; }
 

@@ -147,7 +147,7 @@ void preview_load(App& a, const RemoteEntry& e) {
     PreviewLimits lim = PreviewLimits::from(a.cfg.preview);
     size_t cap = lim.cap_for(p.kind);
     uint64_t gen = p.generation;
-    Vault* v = a.vault.get();
+    auto v = a.vault;
     PreviewKind kind = p.kind;
     a.run_job([&a, v, e, cap, gen, kind] {
         std::string bytes;

@@ -68,7 +68,7 @@ void start_uploads(App& a, const std::vector<std::string>& files) {
 }
 
 void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, bool encrypt, int on_exists) {
-    Vault* v = a.vault.get();
+    auto v = a.vault;
     a.run_job([&a, v, files, dest_dir, encrypt, on_exists] {
         // Expand folders, keeping their structure under dest_dir.
         std::vector<std::pair<std::string, std::string>> items;  // local, logical
@@ -148,7 +148,7 @@ void open_in_editor(App& a, const RemoteEntry& e, bool force) {
         a.notify("File too large to edit as text (" + human_size(e.size) + ")", true);
         return;
     }
-    EditManager* em = a.edits.get();
+    auto em = a.edits;
     a.run_job([&a, em, e] {
         std::string err;
         int id = em->open(e, err);
@@ -170,7 +170,7 @@ void open_externally(App& a, const RemoteEntry& e) {
         a.modal_arg = e.logical;
         return;
     }
-    Vault* v = a.vault.get();
+    auto v = a.vault;
     std::string opener = a.cfg.deps.opener;
     a.run_job([&a, v, e, opener] {
         std::string dir = platform::session_tmp_dir() + "/open/" + to_hex(random_bytes(6));
@@ -189,26 +189,18 @@ static void download_to_dialog(App& a, const RemoteEntry& e) {
         a.modal = "unlock";
         return;
     }
-    Vault* v = a.vault.get();
-    a.run_job([&a, v, e] {
-        std::string dest = platform::pick_save_path("Save " + path_basename(e.logical), path_basename(e.logical));
-        if (dest.empty()) return;
-        OpResult r = v->download_to(e.key, dest);
-        a.post([&a, r, dest] { a.notify(r.ok ? "Saved " + dest : r.error, !r.ok); });
-    });
+    auto v = a.vault;
+    browse(a, BrowseMode::Save, "Download " + path_basename(e.logical), [&a, v, e](std::vector<std::string> paths) {
+        std::string dest = paths[0];
+        a.run_job([&a, v, e, dest] {
+            OpResult r = v->download_to(e.key, dest);
+            a.post([&a, r, dest] { a.notify(r.ok ? "Saved " + dest : r.error, !r.ok); });
+        });
+    }, path_basename(e.logical));
 }
 
 // ---------------------------------------------------------------------------
 // vault tab
-
-static const Node* find_node(const Node* n, const std::string& logical) {
-    if (!n) return nullptr;
-    if (n->logical == logical) return n;
-    for (auto& k : n->kids)
-        if (k->dir ? starts_with(logical, k->logical) : k->logical == logical)
-            if (const Node* f = find_node(k.get(), logical)) return f;
-    return nullptr;
-}
 
 static void context_menu(App& a, const Node& n) {
     if (!ImGui::BeginPopupContextItem()) return;
@@ -226,10 +218,7 @@ static void context_menu(App& a, const Node& n) {
     } else {
         if (ImGui::MenuItem(ICON_FA_UPLOAD "  Upload files here…")) {
             a.current_dir = n.logical;
-            a.run_job([&a] {
-                auto f = platform::pick_files("Upload to vault", true);
-                if (!f.empty()) a.post([&a, f] { start_uploads(a, f); });
-            });
+            browse(a, BrowseMode::OpenMany, "Upload to /" + n.logical, [&a](std::vector<std::string> f) { start_uploads(a, f); });
         }
         if (ImGui::MenuItem(ICON_FA_FOLDER_PLUS "  New folder here…")) {
             a.current_dir = n.logical;
@@ -377,12 +366,8 @@ void draw_vault_tab(App& a) {
         else ImGui::TextColored(kErr, "%s", a.conn_error.c_str());
         return;
     }
-    if (ImGui::Button(ICON_FA_UPLOAD " Upload…")) {
-        a.run_job([&a] {
-            auto f = platform::pick_files("Upload to vault", true);
-            if (!f.empty()) a.post([&a, f] { start_uploads(a, f); });
-        });
-    }
+    if (ImGui::Button(ICON_FA_UPLOAD " Upload…"))
+        browse(a, BrowseMode::OpenMany, "Upload to /" + a.current_dir, [&a](std::vector<std::string> f) { start_uploads(a, f); });
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Or drop files and folders onto the window");
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_FOLDER_PLUS " New folder")) {
@@ -391,7 +376,7 @@ void draw_vault_tab(App& a) {
     }
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_ARROWS_ROTATE " Refresh")) {
-        Vault* v = a.vault.get();
+        auto v = a.vault;
         a.run_job([&a, v] {
             OpResult r = v->refresh();
             a.post([&a, r] { a.tree_dirty = true; if (!r.ok) a.notify(r.error, true); });
@@ -455,18 +440,20 @@ void draw_vault_tab(App& a) {
 void draw_folders_tab(App& a) {
     ImGui::TextWrapped("Tracked folders sync automatically: changes are picked up by the file watcher and the server is polled every %d s.",
                        a.cfg.sync.poll_seconds);
+    ImGui::BeginDisabled(a.conn != App::Conn::Ready);
     if (ImGui::Button(ICON_FA_FOLDER_PLUS " Add folder…")) {
-        a.run_job([&a] {
-            std::string d = platform::pick_folder("Folder to sync");
-            if (!d.empty())
-                a.post([&a, d] {
-                    a.modal_arg = d;
-                    snprintf(a.text_buf, sizeof a.text_buf, "%s", path_basename(d).c_str());
-                    a.upload_encrypt = a.vault_has_key;
-                    a.upload_on_exists = 0;
-                    a.modal = "add-root";
-                });
+        browse(a, BrowseMode::Folder, "Choose a folder to sync", [&a](std::vector<std::string> d) {
+            a.modal_arg = d[0];
+            snprintf(a.text_buf, sizeof a.text_buf, "%s", path_basename(d[0]).c_str());
+            a.upload_encrypt = a.vault_has_key;
+            a.upload_on_exists = 0;
+            a.modal = "add-root";
         });
+    }
+    ImGui::EndDisabled();
+    if (a.conn != App::Conn::Ready) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Connect to your storage first (Settings).");
     }
     ImGui::Spacing();
     auto roots = a.db.roots();
@@ -674,8 +661,9 @@ void draw_transfers_tab(App& a) {
 void draw_edits_tab(App& a) {
     if (!a.edits) return;
     auto ss = a.edits->sessions();
+    static const bool in_ram = platform::session_tmp_in_ram();
     ImGui::TextWrapped("Files opened in your editor. The copy lives in %s and is wiped when you close it here, lock the vault or quit.",
-                       platform::session_tmp_in_ram() ? "RAM (tmpfs)" : "a temporary folder");
+                       in_ram ? "RAM (tmpfs)" : "a temporary folder");
     if (ss.empty()) {
         ImGui::TextDisabled("Nothing open. Use Edit on a file in the Vault tab.");
         return;
@@ -698,7 +686,7 @@ void draw_edits_tab(App& a) {
             ImGui::TableNextColumn();
             ImGui::BeginDisabled(!s.changed);
             if (ImGui::SmallButton("Save back")) {
-                EditManager* em = a.edits.get();
+                auto em = a.edits;
                 int id = s.id;
                 a.run_job([&a, em, id] {
                     OpResult r = em->save_back(id);
@@ -712,8 +700,12 @@ void draw_edits_tab(App& a) {
             ImGui::EndDisabled();
             ImGui::SameLine();
             if (ImGui::SmallButton("Reopen editor")) {
-                std::string err;
-                if (!a.edits->relaunch(s.id, err)) a.notify("Editor did not start: " + err, true);
+                auto em = a.edits;
+                int id = s.id;
+                a.run_job([&a, em, id] {
+                    std::string err;
+                    if (!em->relaunch(id, err)) a.post([&a, err] { a.notify("Editor did not start: " + err, true); });
+                });
             }
             ImGui::SameLine();
             if (ImGui::SmallButton(s.changed ? "Discard…" : "Done")) {
@@ -780,7 +772,7 @@ void draw_settings_tab(App& a) {
         if (ImGui::Button("Test storage")) {
             a.probing = true;
             a.probe_report.clear();
-            Vault* v = a.vault.get();
+            auto v = a.vault;
             a.run_job([&a, v] {
                 std::string rep;
                 S3Client& s = v->s3();
@@ -816,18 +808,33 @@ void draw_settings_tab(App& a) {
         input_str("Open with", f.deps.opener);
         input_str("Text editor", f.deps.editor, 0, "auto ($VISUAL, $EDITOR, desktop default)");
         input_str("Terminal (for vim/nano…)", f.deps.terminal);
-        static Gpg* g = nullptr;
-        static std::string g_cfg;
-        if (!g || g_cfg != f.deps.gpg) { delete g; g = new Gpg(f.deps.gpg); g_cfg = f.deps.gpg; }
+        // Probed at most every 3 s (running `gpg --version` and PATH lookups every frame would stall the UI).
+        struct Deps {
+            std::string gpg_cfg, pdf_cfg, gpg_exe, gpg_ver, pdf, info, tmp;
+            bool gpg_ok = false, keychain = false, in_ram = false;
+            double at = -100;
+        };
+        static Deps d;
+        if (glfwGetTime() - d.at > 3.0 || d.gpg_cfg != f.deps.gpg || d.pdf_cfg != f.deps.pdftoppm) {
+            Gpg g(f.deps.gpg);
+            d.gpg_cfg = f.deps.gpg;
+            d.pdf_cfg = f.deps.pdftoppm;
+            d.gpg_exe = g.exe();
+            d.gpg_ver = g.version();
+            d.gpg_ok = g.available();
+            d.pdf = find_executable(f.deps.pdftoppm == "auto" ? "pdftoppm" : f.deps.pdftoppm);
+            d.info = find_executable("pdfinfo");
+            d.keychain = platform::keychain_available();
+            d.tmp = platform::session_tmp_dir();
+            d.in_ram = platform::session_tmp_in_ram();
+            d.at = glfwGetTime();
+        }
         if (ImGui::BeginTable("deps", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerH)) {
-            dep_row("gpg", g->exe(), g->available() ? "GnuPG " + g->version() : g->version().empty() ? "install gnupg" : g->version(), g->available());
-            std::string pdf = find_executable(f.deps.pdftoppm == "auto" ? "pdftoppm" : f.deps.pdftoppm);
-            dep_row("pdftoppm", pdf, pdf.empty() ? "PDF preview disabled (install poppler-utils)" : "PDF preview", !pdf.empty());
-            std::string info = find_executable("pdfinfo");
-            dep_row("pdfinfo", info, "PDF page count", !info.empty());
-            dep_row("keychain", platform::keychain_available() ? "Secret Service" : "", "S3 secret and remembered vault key", platform::keychain_available());
-            dep_row("temp dir", platform::session_tmp_dir(), platform::session_tmp_in_ram() ? "in RAM (tmpfs)" : "on disk: files are overwritten before deletion",
-                    platform::session_tmp_in_ram());
+            dep_row("gpg", d.gpg_exe, d.gpg_ok ? "GnuPG " + d.gpg_ver : d.gpg_ver.empty() ? "install gnupg" : d.gpg_ver, d.gpg_ok);
+            dep_row("pdftoppm", d.pdf, d.pdf.empty() ? "PDF preview disabled (install poppler-utils)" : "PDF preview", !d.pdf.empty());
+            dep_row("pdfinfo", d.info, "PDF page count", !d.info.empty());
+            dep_row("keychain", d.keychain ? "Secret Service" : "", "S3 secret and remembered vault key", d.keychain);
+            dep_row("temp dir", d.tmp, d.in_ram ? "in RAM (tmpfs)" : "on disk: files are overwritten before deletion", d.in_ram);
             ImGui::EndTable();
         }
     }
@@ -866,7 +873,7 @@ void draw_settings_tab(App& a) {
         ImGui::SetNextItemWidth(160); ImGui::InputInt("Keep vault trash (days)", &f.sync.trash_days);
         ImGui::BeginDisabled(a.conn != App::Conn::Ready);
         if (ImGui::Button("Empty vault trash older than that")) {
-            Vault* v = a.vault.get();
+            auto v = a.vault;
             int days = f.sync.trash_days;
             a.run_job([&a, v, days] {
                 int n = 0;
@@ -974,8 +981,7 @@ static void password_pair(App& a, bool& acceptable) {
 }
 
 void draw_modals(App& a) {
-    Vault* v = a.vault.get();
-    if (!v) return;
+    auto v = a.vault;  // may be null before the first connection; dialogs below that need it check
 
     if (begin_modal(a, "unlock", "Unlock vault")) {
         ImGui::Text(ICON_FA_LOCK " Enter the vault password to work with encrypted files.");
@@ -1207,7 +1213,7 @@ void draw_modals(App& a) {
             std::vector<int64_t> ids(a.conflict_sel.begin(), a.conflict_sel.end());
             Resolution r = how == "keep-both" ? Resolution::KeepBoth : how == "keep-local" ? Resolution::KeepLocal
                          : how == "keep-remote" ? Resolution::KeepRemote : Resolution::KeepNewest;
-            Engine* e = a.engine.get();
+            auto e = a.engine;
             if (!v->unlocked() && a.vault_has_key) { a.modal = "unlock"; }
             else run_modal_job(a, [e, v, ids, r] {
                 int fails = 0;
@@ -1288,7 +1294,7 @@ void draw_modals(App& a) {
         ImGui::TextWrapped("%s was changed in the editor. Save it back to the vault?", have ? s.logical.c_str() : "The file");
         modal_error(a);
         ImGui::BeginDisabled(a.modal_busy || !have);
-        EditManager* em = a.edits.get();
+        auto em = a.edits;
         int id = a.edit_prompt_id;
         if (ImGui::Button(ICON_FA_CLOUD_ARROW_UP " Save back")) {
             a.edits->clear_prompt(id);
@@ -1317,7 +1323,7 @@ void draw_modals(App& a) {
         a.edits->get(a.edit_prompt_id, s);
         ImGui::TextWrapped("%s was changed on the server since you opened it.", s.logical.c_str());
         modal_error(a);
-        EditManager* em = a.edits.get();
+        auto em = a.edits;
         int id = a.edit_prompt_id;
         auto after = [&a](const char* msg) { return [&a, msg] { a.notify(msg); a.tree_dirty = true; if (a.engine) a.engine->request_sync(); }; };
         ImGui::BeginDisabled(a.modal_busy);
@@ -1345,9 +1351,9 @@ void draw_modals(App& a) {
         ImGui::TextWrapped("%s does not look like a text file. Open it in the text editor anyway? Saving binary files from a text editor can damage them.",
                            a.modal_arg.c_str());
         if (ImGui::Button("Open anyway")) {
-            for (auto& e : a.vault->cached_entries())
-                if (e.logical == a.modal_arg && !e.dir_marker) { close_modal(a); open_in_editor(a, e, true); break; }
-            if (a.modal == "force-edit") close_modal(a);
+            const Node* n = find_node(a.tree.get(), a.modal_arg);
+            close_modal(a);
+            if (n && !n->dir) open_in_editor(a, n->entry, true);
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) close_modal(a);
@@ -1362,8 +1368,7 @@ void draw_modals(App& a) {
             a.open_warning_shown = true;
             std::string target = a.modal_arg;
             close_modal(a);
-            for (auto& e : a.vault->cached_entries())
-                if (e.logical == target && !e.dir_marker) { open_externally(a, e); break; }
+            if (const Node* n = find_node(a.tree.get(), target); n && !n->dir) open_externally(a, n->entry);
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) close_modal(a);
@@ -1374,7 +1379,7 @@ void draw_modals(App& a) {
         bool quit = a.modal == "quit-unsaved";
         ImGui::TextWrapped("Some files open in the editor have unsaved changes.");
         modal_error(a);
-        EditManager* em = a.edits.get();
+        auto em = a.edits;
         ImGui::BeginDisabled(a.modal_busy);
         if (ImGui::Button("Save all")) {
             run_modal_job(a, [em] {
