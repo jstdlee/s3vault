@@ -12,6 +12,9 @@ namespace s3v::platform {
 
 // ---- Secrets (libsecret / Keychain / Credential Manager / Keystore) ----
 bool keychain_available();
+// Loads libsecret/glib and does one lookup so their one-time initialisation happens on the calling thread.
+// Call from main() before starting other threads or creating a GL context.
+void keychain_preload();
 // expires_unix 0 = no expiry.
 bool keychain_store(const std::string& account, std::string_view secret, int64_t expires_unix = 0);
 // False if missing or expired (an expired entry is deleted).

@@ -18,6 +18,8 @@ struct CurlApi {
 };
 
 // nullptr if libcurl cannot be loaded; `error` explains why.
+// The first call loads libcurl and runs curl_global_init (OpenSSL init), which is not thread-safe:
+// make it from main() before any other thread exists.
 const CurlApi* curl_api(const char** error = nullptr);
 
 }  // namespace s3v

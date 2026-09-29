@@ -18,6 +18,7 @@
 #include "platform.h"
 #include "preview/preview.h"
 #include "secret/strength.h"
+#include "store/curl_dl.h"
 #include "sync/engine.h"
 #include "util/fs.h"
 #include "util/secure.h"
@@ -274,6 +275,7 @@ int main(int argc, char** argv) {
     }
     platform::install_exit_cleanup();
     platform::cleanup_stale_tmp();
+    curl_api();  // curl_global_init before `watch` starts the engine threads
     std::string cmd = a[0];
     a.erase(a.begin());
     Ctx c;

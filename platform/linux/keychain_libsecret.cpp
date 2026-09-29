@@ -99,6 +99,12 @@ void* attrs(const Api* a, const std::string& account) {
 
 }  // namespace
 
+void keychain_preload() {
+    if (!api() || !getenv("DBUS_SESSION_BUS_ADDRESS")) return;
+    SecureString unused;
+    keychain_load("s3vault-preload", unused);  // starts GDBus and initialises libgcrypt now, not on a worker thread
+}
+
 bool keychain_available() {
     const Api* a = api();
     if (!a || !getenv("DBUS_SESSION_BUS_ADDRESS")) return false;

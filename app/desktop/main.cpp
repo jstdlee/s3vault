@@ -17,6 +17,7 @@
 #include "backends/imgui_impl_opengl3.h"
 #include "imgui.h"
 #include "platform.h"
+#include "store/curl_dl.h"
 #include "util/fs.h"
 #include "util/strings.h"
 #include "util/subprocess.h"
@@ -203,6 +204,11 @@ int main(int argc, char** argv) {
         }
     }
     platform::install_exit_cleanup();
+    // One-time library initialisation must happen here, before GL and before any worker thread:
+    // curl_global_init (OpenSSL) is not thread-safe, and loading these libraries while the NVIDIA GL
+    // driver renders on another thread crashed the app.
+    curl_api();
+    platform::keychain_preload();
 
     glfwSetErrorCallback([](int, const char* d) { fprintf(stderr, "glfw: %s\n", d); });
     if (!glfwInit()) return 1;
