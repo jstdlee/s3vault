@@ -2,12 +2,17 @@
 #include "backends/imgui_impl_opengl3_loader.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#include <signal.h>
 #include <strings.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 #include <cstdlib>
 #include <string>
 
@@ -191,14 +196,66 @@ static void apply_style() {
     c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 1, 1, 0.025f);
 }
 
+// The NVIDIA GL driver segfaults on the first draw when it cannot allocate a graphics context (e.g. a
+// local LLM holds most of the GB10's unified memory). The GUI therefore runs in a child process; if that
+// child dies from a signal before its first frame reached the screen, we start again with Mesa's
+// software renderer, which needs no GPU memory.
+static int g_ready_fd = -1;
+static pid_t g_child = -1;
+
+static void use_software_gl() {
+    setenv("__GLX_VENDOR_LIBRARY_NAME", "mesa", 1);
+    setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+}
+
+// Returns in the child (normal startup); the parent never returns.
+static void guard_gpu_start(int argc, char** argv) {
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        close(fds[0]);
+        g_ready_fd = fds[1];
+        return;
+    }
+    close(fds[1]);
+    g_child = pid;
+    for (int sig : {SIGINT, SIGTERM, SIGHUP})
+        signal(sig, [](int s) { if (g_child > 0) kill(g_child, s); });
+    char c = 0;
+    bool ready = read(fds[0], &c, 1) == 1;  // the child writes one byte after its first frame is shown
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (!ready && WIFSIGNALED(st) && (WTERMSIG(st) == SIGSEGV || WTERMSIG(st) == SIGBUS || WTERMSIG(st) == SIGABRT)) {
+        fprintf(stderr, "s3vault: the GPU driver crashed while opening the window (GPU memory full?); "
+                        "retrying with software rendering\n");
+        use_software_gl();
+        std::vector<char*> args(argv, argv + argc);
+        args.push_back(const_cast<char*>("--software"));
+        args.push_back(nullptr);
+        execv("/proc/self/exe", args.data());
+        _exit(1);
+    }
+    _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+}
+
 int main(int argc, char** argv) {
+    bool software = getenv("S3VAULT_SOFTWARE_GL") != nullptr;
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--software")) software = true;
+    if (software) use_software_gl();
+    else guard_gpu_start(argc, argv);  // before any thread exists (fork)
+
     Script script;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--home" && i + 1 < argc) setenv("S3VAULT_HOME", argv[++i], 1);
         else if (a == "--script" && i + 1 < argc) script.steps = split(argv[++i], ';');
+        else if (a == "--software") {}
         else if (a == "-h" || a == "--help") {
             printf("s3vault — sync files with S3-compatible storage\n  --home DIR   use DIR for config and data\n"
+                   "  --software   render on the CPU (automatic if the GPU driver cannot open a window)\n"
                    "See also: s3vault-cli --help\n");
             return 0;
         }
@@ -283,6 +340,11 @@ int main(int argc, char** argv) {
             else { settle = 0; if (!save_png(app.win, shot)) fprintf(stderr, "cannot write %s\n", shot.c_str()); }
         }
         glfwSwapBuffers(app.win);
+        if (g_ready_fd >= 0) {  // first frame is on screen: tell the guard process the GPU path works
+            (void)!write(g_ready_fd, "1", 1);
+            close(g_ready_fd);
+            g_ready_fd = -1;
+        }
         double took = glfwGetTime() - t_frame;  // work done on the UI thread this frame (excludes waiting for events)
         if (prev_frame >= 0) {
             worst_frame = std::max(worst_frame, took);
