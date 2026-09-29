@@ -84,6 +84,11 @@ public:
     OpResult init(const std::string& password);  // password may be empty (plain-only vault for now)
     OpResult set_password(const std::string& old_password, const std::string& new_password);
     OpResult unlock(const std::string& password);
+    // Checks a password without the network (against the key.gpg fetched at unlock). Used to unlock the
+    // UI while the key stays loaded for background sync. Falls back to unlock() if nothing is cached.
+    OpResult verify_password(const std::string& password);
+    // GUI: keep the vault key loaded until quit/forget, so sync continues while the window is locked.
+    void keep_key_for_session() { keys_.configure(keys_.mode(), 0); }
     bool try_unlock_from_keychain();
     void lock();
     bool unlocked() { return keys_.unlocked(); }
@@ -98,6 +103,8 @@ public:
     // ---- transfers (encrypt/decrypt by the key's .gpg suffix) ----
     OpResult upload_file(const std::string& local, const std::string& key, const Conditions& c,
                          const Progress& progress = {});
+    // In-memory upload (built-in editor): encrypted through gpg's pipes, never written to disk as plaintext.
+    OpResult upload_bytes(const std::string& data, const std::string& key, const Conditions& c);
     // Writes to a temp file beside dest; `before_commit` may veto the final rename (return false).
     OpResult download_to(const std::string& key, const std::string& dest,
                          const std::function<bool()>& before_commit = {});
@@ -127,6 +134,7 @@ private:
     PassCache keys_;
     std::string prefix_;
     bool has_key_ = false;
+    std::string key_ct_;  // key.gpg ciphertext from the last unlock (safe to hold: it is encrypted)
     std::mutex mu_;
 };
 

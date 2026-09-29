@@ -124,13 +124,6 @@ check "mv" 'A mv inbox/manual.txt inbox/moved.txt && A cat inbox/moved.txt | gre
 check "get" 'A get inbox/moved.txt "$work/got.txt" >/dev/null && cmp -s "$work/got.txt" "$work/manual.txt"'
 check "rm → trash → restore" 'A rm inbox/moved.txt >/dev/null && n=$(A trash | grep -n "inbox/moved.txt" | head -1 | awk "{print \$1}") && A restore "$n" >/dev/null && A cat inbox/moved.txt | grep -q manual'
 
-echo "== edit in a text editor, save back"
-A config set deps.editor "sh -c 'sleep 0.3; echo appended-by-editor >> \"\$0\"'"
-check "edit + save back" '(sleep 2; echo; echo y) | A edit inbox/moved.txt >/dev/null 2>&1 && A cat inbox/moved.txt | grep -q appended-by-editor'
-echo "server change meanwhile" > "$work/other.txt"
-check "edit when the server changed meanwhile → keep both" '(sleep 2; B put "$work/other.txt" inbox/moved.txt --overwrite >/dev/null 2>&1; echo; echo y; echo k) | A edit inbox/moved.txt >/dev/null 2>&1 && A cat inbox/moved.txt | grep -q "server change meanwhile" && A ls inbox | grep -q "moved (conflict edited"'
-check "no decrypted leftovers in the session tmp dir" '! find "${XDG_RUNTIME_DIR:-/nonexistent}/s3vault" -type f 2>/dev/null | grep -q .'
-
 echo "== tamper and password checks"
 printf 'planted' | gpg --batch --store -o "$work/lit.gpg" 2>/dev/null
 H put-raw inbox/planted.txt.gpg "$work/lit.gpg"

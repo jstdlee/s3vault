@@ -26,19 +26,20 @@ struct PreviewLimits {
 // Downloads (and decrypts) at most `cap` bytes into `out`. The caller owns and wipes `out`.
 OpResult load_preview_bytes(Vault& v, const RemoteEntry& e, size_t cap, std::string& out);
 
-// A PDF held in the session tmp dir only while the preview is open.
+// A PDF kept in memory while the preview is open; poppler reads it from a pipe (fd://0), so no
+// decrypted file is ever written.
 class PdfDoc {
 public:
     ~PdfDoc() { close(); }
-    bool open(const std::string& bytes, std::string& error);  // writes 0600 file, reads page count
+    bool open(std::string bytes, std::string& error);  // takes the bytes, reads the page count
     int pages() const { return pages_; }
     // PNG bytes of one page (1-based). Bounded by timeout and output size.
     bool render(int page, int dpi, std::string& png, std::string& error);
     void close();
-    bool is_open() const { return !path_.empty(); }
+    bool is_open() const { return !bytes_.empty(); }
 
 private:
-    std::string path_;
+    std::string bytes_;
     int pages_ = 0;
 };
 

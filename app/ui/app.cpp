@@ -8,6 +8,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "platform.h"
 #include "util/strings.h"
 
@@ -127,6 +128,7 @@ void connect_async(App& a) {
             a.tree_dirty = true;
             a.upload_encrypt = key;
             if (key && !a.vault->unlocked()) a.modal = "unlock";
+            a.vault->keep_key_for_session();  // locking hides the window but keeps sync running
             a.engine->start();  // returns immediately; watches and syncs run on the engine's threads
         });
     });
@@ -142,20 +144,25 @@ void app_init(App& a) {
     connect_async(a);
 }
 
-void lock_vault(App& a, bool manual) {
+// Locks the window only: content can't be viewed until the password is entered again, but the vault
+// key stays loaded so sync (including encrypted files) keeps running. Editor buffers are kept in memory.
+void lock_ui(App& a, const char* why) {
+    if (a.ui_locked) return;
     preview_free(a);
-    if (a.edits) {
-        // Unsaved edits survive an automatic lock (their plaintext stays in the RAM tmp dir) so nothing
-        // is lost; saved ones are closed and wiped.
-        for (auto& s : a.edits->sessions())
-            if (!s.changed || manual) a.edits->discard(s.id);
-    }
-    if (a.vault) {
-        if (manual) a.vault->lock();
-        else a.vault->keys().lock();
-    }
-    if (!a.edits || a.edits->sessions().empty()) platform::wipe_session_tmp();
-    a.notify(manual ? "Vault locked" : "Vault locked after inactivity");
+    a.ui_locked = true;
+    a.modal.clear();
+    a.multi.clear();
+    a.lock_error.clear();
+    if (GImGui->OpenPopupStack.Size > 0) ImGui::ClosePopupToLevel(0, true);  // file browser, dialogs
+    if (why) a.notify(why);
+}
+
+// Drops the vault key: encrypted files stop syncing until the password is entered again.
+void forget_key(App& a) {
+    if (a.vault) a.vault->lock();
+    a.ui_locked = false;
+    preview_free(a);
+    a.notify("Vault key forgotten: encrypted files will not sync until you unlock");
 }
 
 void app_shutdown(App& a) {
@@ -323,6 +330,69 @@ const Node* find_node(const Node* n, const std::string& logical) {
 }
 
 // ---------------------------------------------------------------------------
+// lock screen
+
+void draw_lock_screen(App& a) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin("##locked", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    float w = 420;
+    ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - w) * 0.5f, vp->WorkSize.y * 0.28f));
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    ImGui::Text(ICON_FA_LOCK "  s3vault is locked");
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s/%s", a.cfg.storage.bucket.c_str(), a.vault ? a.vault->prefix().c_str() : "");
+    // Sync status stays visible: it shows no file content.
+    size_t nx = a.engine ? a.engine->transfers().size() : 0;
+    if (a.engine && a.engine->syncing()) ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1), ICON_FA_ROTATE "  Syncing in the background%s",
+                                                             nx ? (" · " + std::to_string(nx) + " transfer(s)").c_str() : "");
+    else if (a.engine && a.engine->last_sync())
+        ImGui::TextDisabled(ICON_FA_CIRCLE_CHECK "  Sync keeps running · last %s", format_local_time(a.engine->last_sync()).c_str());
+    if (a.edits && a.edits->any_dirty()) ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), ICON_FA_PEN "  Unsaved editor changes are kept");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(w);
+    if (!a.lock_busy && !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
+    bool enter = ImGui::InputTextWithHint("##pw", "Vault password", a.lock_pw, sizeof a.lock_pw,
+                                          ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::BeginDisabled(a.lock_busy || !a.lock_pw[0]);
+    if ((ImGui::Button(ICON_FA_UNLOCK " Unlock", ImVec2(w, 0)) || enter) && a.lock_pw[0] && !a.lock_busy) {
+        std::string pw = a.lock_pw;
+        explicit_bzero(a.lock_pw, sizeof a.lock_pw);
+        a.lock_busy = true;
+        auto v = a.vault;
+        a.run_job([&a, v, pw]() mutable {
+            OpResult r = v ? v->verify_password(pw) : OpResult::fail("not connected");
+            wipe(pw);
+            a.post([&a, r] {
+                a.lock_busy = false;
+                if (r.ok) {
+                    a.ui_locked = false;
+                    a.last_input = glfwGetTime();
+                } else {
+                    a.lock_error = r.error;
+                }
+            });
+        });
+    }
+    ImGui::EndDisabled();
+    if (a.lock_busy) ImGui::TextDisabled("Checking…");
+    if (!a.lock_error.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", a.lock_error.c_str());
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("Sync keeps running while locked. To also stop syncing encrypted files:");
+    if (ImGui::SmallButton("Forget the vault key")) {
+        forget_key(a);
+        a.modal = "unlock";
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::EndGroup();
+    ImGui::End();
+    draw_modals(a);  // only the unlock dialog can be open here
+}
+
+// ---------------------------------------------------------------------------
 // frame
 
 static void toolbar(App& a) {
@@ -340,15 +410,9 @@ static void toolbar(App& a) {
     if (c == C::Ready) {
         ImGui::SameLine();
         if (a.vault_has_key) {
-            bool un = a.vault->unlocked();
-            if (un) {
-                int64_t left = a.vault->keys().seconds_left();
-                if (ImGui::Button(ICON_FA_UNLOCK " Lock")) {
-                    if (a.edits && a.edits->any_unsaved()) a.modal = "lock-unsaved";
-                    else lock_vault(a, true);
-                }
-                if (left >= 0 && ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Locks automatically after %lld min of inactivity", static_cast<long long>(left / 60 + 1));
+            if (a.vault->unlocked()) {
+                if (ImGui::Button(ICON_FA_LOCK " Lock")) lock_ui(a, nullptr);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide the vault until the password is entered again.\nSync keeps running in the background.");
             } else if (ImGui::Button(ICON_FA_LOCK " Unlock")) {
                 a.modal = "unlock";
             }
@@ -373,22 +437,15 @@ void app_frame(App& a) {
     a.drain_ui_queue();
     if (a.tree_dirty && a.conn == App::Conn::Ready) rebuild_tree(a);
 
-    // Idle lock: user input counts as activity.
-    if (a.vault && a.vault->unlocked() && a.had_input) {
-        a.vault->keys().get();
-        a.had_input = false;
-    }
-    if (a.vault && a.vault->keys().tick()) lock_vault(a, false);
+    // Idle → lock the window (not the key: sync continues). Only in "idle" mode.
+    if (a.vault && a.vault->unlocked() && !a.ui_locked && a.cfg.security.remember == "idle" &&
+        a.cfg.security.idle_minutes > 0 && glfwGetTime() - a.last_input > a.cfg.security.idle_minutes * 60.0)
+        lock_ui(a, "Locked after inactivity; sync continues");
     preview_tick(a);
-    if (a.edits) {
-        a.edits->poll();
-        if (a.modal.empty())
-            for (auto& s : a.edits->sessions())
-                if (s.prompt) {
-                    a.edit_prompt_id = s.id;
-                    a.modal = "edit-changed";
-                    break;
-                }
+
+    if (a.ui_locked) {
+        draw_lock_screen(a);
+        return;
     }
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -401,7 +458,7 @@ void app_frame(App& a) {
     ImGui::Separator();
 
     size_t nconf = a.db.conflicts().size();
-    size_t nedit = a.edits ? a.edits->sessions().size() : 0;
+    size_t nedit = a.edits ? a.edits->ids().size() : 0;
     size_t nxfer = a.engine ? a.engine->transfers().size() : 0;
     if (ImGui::BeginTabBar("tabs")) {
         auto tab = [&](int id, const std::string& label) {
@@ -419,7 +476,7 @@ void app_frame(App& a) {
         if (ct) { draw_conflicts_tab(a); ImGui::EndTabItem(); }
         std::string tl = std::string(ICON_FA_CLOUD_ARROW_UP " Transfers") + (nxfer ? " (" + std::to_string(nxfer) + ")" : "") + "###transfers";
         if (tab(3, tl)) { draw_transfers_tab(a); ImGui::EndTabItem(); }
-        std::string el = std::string(ICON_FA_PEN_TO_SQUARE " Edits") + (nedit ? " (" + std::to_string(nedit) + ")" : "") + "###edits";
+        std::string el = std::string(ICON_FA_PEN_TO_SQUARE " Editor") + (nedit ? " (" + std::to_string(nedit) + ")" : "") + "###edits";
         if (tab(4, el)) { draw_edits_tab(a); ImGui::EndTabItem(); }
         if (tab(5, ICON_FA_GEAR " Settings###settings")) { draw_settings_tab(a); ImGui::EndTabItem(); }
         ImGui::EndTabBar();

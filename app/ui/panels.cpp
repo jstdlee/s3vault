@@ -133,19 +133,15 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
     });
 }
 
-void open_in_editor(App& a, const RemoteEntry& e, bool force) {
-    if (!force && preview_kind(e.logical) != PreviewKind::Text) {
-        a.modal = "force-edit";
-        a.modal_arg = e.logical;
-        return;
-    }
+// Opens the file in the built-in editor (Edits tab). Decrypted text stays in memory only.
+void open_in_editor(App& a, const RemoteEntry& e) {
     if (e.encrypted && !a.vault->unlocked()) {
         a.modal = "unlock";
         return;
     }
-    size_t cap = size_t(a.cfg.preview.text_max_mb) << 20;
-    if (e.size > cap * 8) {
-        a.notify("File too large to edit as text (" + human_size(e.size) + ")", true);
+    size_t cap = size_t(std::max(1, a.cfg.preview.text_max_mb)) << 20;
+    if (e.size > cap + (e.encrypted ? 4096 : 0)) {
+        a.notify("Too large for the built-in editor (" + human_size(e.size) + ", limit " + human_size(cap) + ")", true);
         return;
     }
     auto em = a.edits;
@@ -153,33 +149,12 @@ void open_in_editor(App& a, const RemoteEntry& e, bool force) {
         std::string err;
         int id = em->open(e, err);
         a.post([&a, id, err, name = e.logical] {
-            if (!id) a.notify("Cannot edit " + name + ": " + err, true);
-            else if (!err.empty()) a.notify("Editor did not start: " + err + " (see Settings → Dependencies)", true);
-            else a.notify("Opened " + name + " in your editor; you will be asked before anything is saved back");
-        });
-    });
-}
-
-void open_externally(App& a, const RemoteEntry& e) {
-    if (e.encrypted && !a.vault->unlocked()) {
-        a.modal = "unlock";
-        return;
-    }
-    if (!a.open_warning_shown && e.encrypted) {
-        a.modal = "open-warning";
-        a.modal_arg = e.logical;
-        return;
-    }
-    auto v = a.vault;
-    std::string opener = a.cfg.deps.opener;
-    a.run_job([&a, v, e, opener] {
-        std::string dir = platform::session_tmp_dir() + "/open/" + to_hex(random_bytes(6));
-        mkdirs(dir, 0700);
-        std::string path = dir + "/" + path_basename(e.logical);
-        OpResult r = v->download_to(e.key, path);
-        bool ok = r.ok && platform::open_external(opener, path);
-        a.post([&a, ok, err = r.ok ? "cannot start " + opener : r.error] {
-            if (!ok) a.notify(err, true);
+            if (!id) {
+                a.notify("Cannot edit " + name + ": " + err, true);
+                return;
+            }
+            a.edit_focus = id;
+            a.want_tab = 4;
         });
     });
 }
@@ -209,10 +184,7 @@ static void context_menu(App& a, const Node& n) {
         const RemoteEntry& e = n.entry;
         bool previewable = preview_kind(e.logical) != PreviewKind::None;
         if (ImGui::MenuItem(ICON_FA_EYE "  Preview", nullptr, false, previewable)) preview_load(a, e);
-        if (ImGui::MenuItem(ICON_FA_PEN_TO_SQUARE "  Edit in text editor", nullptr, false, preview_kind(e.logical) == PreviewKind::Text))
-            open_in_editor(a, e, false);
-        if (ImGui::MenuItem(ICON_FA_PEN "  Force open in text editor…")) open_in_editor(a, e, false);
-        if (ImGui::MenuItem(ICON_FA_FILE_EXPORT "  Open with default app")) open_externally(a, e);
+        if (ImGui::MenuItem(ICON_FA_PEN_TO_SQUARE "  Edit")) open_in_editor(a, e);
         if (ImGui::MenuItem(ICON_FA_DOWNLOAD "  Download to…")) download_to_dialog(a, e);
         ImGui::Separator();
     } else {
@@ -273,6 +245,11 @@ static void draw_node(App& a, const Node& n) {
         if (clicked) {
             if (ImGui::GetIO().KeyCtrl) {
                 if (!a.multi.erase(k.logical)) a.multi.insert(k.logical);
+            } else if (a.selected == k.logical && a.multi.empty() && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                // Clicking the selected row again deselects it; new folders/uploads go back to the vault root.
+                if (a.preview.state != PreviewState::Empty) preview_free(a);
+                a.selected.clear();
+                a.current_dir.clear();
             } else {
                 a.multi.clear();
                 if (a.selected != k.logical) {
@@ -346,9 +323,8 @@ static void details_pane(App& a) {
     if (pk == PreviewKind::None && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Preview supports text, images (png/jpg/gif/bmp/tga/psd) and PDF");
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_PEN_TO_SQUARE " Edit")) open_in_editor(a, e, false);
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_FILE_EXPORT " Open")) open_externally(a, e);
+    if (ImGui::Button(ICON_FA_PEN_TO_SQUARE " Edit")) open_in_editor(a, e);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Built-in text editor; the decrypted text stays in memory");
     ImGui::SameLine();
     if (ImGui::Button(ICON_FA_DOWNLOAD " Download…")) download_to_dialog(a, e);
     ImGui::Separator();
@@ -397,7 +373,17 @@ void draw_vault_tab(App& a) {
         }
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("Destination: /%s", a.current_dir.c_str());
+    ImGui::TextDisabled("New items go to: /%s", a.current_dir.c_str());
+    if (!a.current_dir.empty()) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(ICON_FA_XMARK " vault root")) {
+            a.current_dir.clear();
+            a.selected.clear();
+            a.multi.clear();
+            if (a.preview.state != PreviewState::Empty) preview_free(a);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear the selection (or click empty space / press Esc)");
+    }
 
     if (ImGui::BeginTable("split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, ImVec2(0, -1))) {
         ImGui::TableSetupColumn("tree", ImGuiTableColumnFlags_WidthStretch, 0.6f);
@@ -424,6 +410,15 @@ void draw_vault_tab(App& a) {
                 a.tree_dirty = true;
             }
             if (a.tree) draw_node(a, *a.tree);
+            // Click on empty space (below the rows) or Esc: clear the selection → destination is the vault root.
+            bool empty_click = ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered();
+            bool esc = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape);
+            if (empty_click || esc) {
+                if (a.preview.state != PreviewState::Empty) preview_free(a);
+                a.selected.clear();
+                a.multi.clear();
+                a.current_dir.clear();
+            }
             ImGui::EndTable();
         }
         ImGui::TableNextColumn();
@@ -658,66 +653,6 @@ void draw_transfers_tab(App& a) {
     ImGui::EndChild();
 }
 
-void draw_edits_tab(App& a) {
-    if (!a.edits) return;
-    auto ss = a.edits->sessions();
-    static const bool in_ram = platform::session_tmp_in_ram();
-    ImGui::TextWrapped("Files opened in your editor. The copy lives in %s and is wiped when you close it here, lock the vault or quit.",
-                       in_ram ? "RAM (tmpfs)" : "a temporary folder");
-    if (ss.empty()) {
-        ImGui::TextDisabled("Nothing open. Use Edit on a file in the Vault tab.");
-        return;
-    }
-    if (ImGui::BeginTable("edits", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
-        ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 220);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 330);
-        ImGui::TableHeadersRow();
-        for (auto& s : ss) {
-            ImGui::PushID(s.id);
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("%s %s", type_icon(s.logical, false, false), s.logical.c_str());
-            ImGui::TableNextColumn();
-            if (s.conflict) ImGui::TextColored(kErr, ICON_FA_TRIANGLE_EXCLAMATION " changed on server");
-            else if (s.changed) ImGui::TextColored(kWarn, ICON_FA_PEN " unsaved changes");
-            else ImGui::TextDisabled("no changes");
-            if (!s.error.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", s.error.c_str());
-            ImGui::TableNextColumn();
-            ImGui::BeginDisabled(!s.changed);
-            if (ImGui::SmallButton("Save back")) {
-                auto em = a.edits;
-                int id = s.id;
-                a.run_job([&a, em, id] {
-                    OpResult r = em->save_back(id);
-                    a.post([&a, r, id] {
-                        if (r.ok) { a.notify("Saved to the vault"); a.tree_dirty = true; if (a.engine) a.engine->request_sync(); }
-                        else if (r.precondition_failed) { a.edit_prompt_id = id; a.modal = "edit-conflict"; }
-                        else a.notify(r.error, true);
-                    });
-                });
-            }
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Reopen editor")) {
-                auto em = a.edits;
-                int id = s.id;
-                a.run_job([&a, em, id] {
-                    std::string err;
-                    if (!em->relaunch(id, err)) a.post([&a, err] { a.notify("Editor did not start: " + err, true); });
-                });
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton(s.changed ? "Discard…" : "Done")) {
-                if (s.changed) { a.edit_prompt_id = s.id; a.modal = "edit-discard"; }
-                else a.edits->discard(s.id);
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-}
-
 // ---------------------------------------------------------------------------
 // settings
 
@@ -805,9 +740,6 @@ void draw_settings_tab(App& a) {
     if (ImGui::CollapsingHeader("Dependencies", ImGuiTreeNodeFlags_DefaultOpen)) {
         input_str("gpg", f.deps.gpg, 0, "auto");
         input_str("pdftoppm", f.deps.pdftoppm, 0, "auto");
-        input_str("Open with", f.deps.opener);
-        input_str("Text editor", f.deps.editor, 0, "auto ($VISUAL, $EDITOR, desktop default)");
-        input_str("Terminal (for vim/nano…)", f.deps.terminal);
         // Probed at most every 3 s (running `gpg --version` and PATH lookups every frame would stall the UI).
         struct Deps {
             std::string gpg_cfg, pdf_cfg, gpg_exe, gpg_ver, pdf, info, tmp;
@@ -840,13 +772,13 @@ void draw_settings_tab(App& a) {
     }
     if (ImGui::CollapsingHeader("Security")) {
         const char* modes[] = {"ask", "session", "idle", "keychain"};
-        const char* labels[] = {"Ask every time", "Until I lock or quit", "Until idle for N minutes", "In the keychain for N days"};
+        const char* labels[] = {"Ask every time (no background sync of encrypted files)", "Until I quit", "Until I quit; lock the window after N idle minutes", "In the keychain for N days"};
         int mi = 2;
         for (int i = 0; i < 4; i++) if (f.security.remember == modes[i]) mi = i;
         ImGui::SetNextItemWidth(360);
         if (ImGui::Combo("Remember the password", &mi, labels, 4)) f.security.remember = modes[mi];
         ImGui::SetNextItemWidth(160);
-        ImGui::InputInt("Idle minutes", &f.security.idle_minutes);
+        ImGui::InputInt("Lock window after idle (minutes)", &f.security.idle_minutes);
         ImGui::SetNextItemWidth(160);
         ImGui::InputInt("Keychain days", &f.security.keychain_days);
         ImGui::SetNextItemWidth(160);
@@ -855,7 +787,11 @@ void draw_settings_tab(App& a) {
         ImGui::BeginDisabled(a.conn != App::Conn::Ready);
         if (ImGui::Button(a.vault_has_key ? "Change vault password…" : "Set vault password…")) a.modal = a.vault_has_key ? "change-password" : "set-password";
         ImGui::EndDisabled();
-        ImGui::TextDisabled("Only the vault key is kept in memory (locked, wiped on lock). Changing the password re-encrypts only key.gpg.");
+        ImGui::TextDisabled("Lock hides the window; the vault key stays in locked memory so sync continues. Changing the password re-encrypts only key.gpg.");
+        ImGui::BeginDisabled(!a.vault || !a.vault->unlocked());
+        if (ImGui::Button("Forget vault key now")) forget_key(a);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Stops syncing encrypted files until you unlock again");
     }
     if (ImGui::CollapsingHeader("Preview limits")) {
         ImGui::SetNextItemWidth(160); ImGui::InputInt("Text (MB)", &f.preview.text_max_mb);
@@ -988,10 +924,10 @@ void draw_modals(App& a) {
         ImGui::SetNextItemWidth(360);
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         bool enter = ImGui::InputText("##pw", a.pw1, sizeof a.pw1, ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
-        const char* how = a.cfg.security.remember == "ask" ? "for this operation only"
-                          : a.cfg.security.remember == "session" ? "until you lock or quit"
-                          : a.cfg.security.remember == "keychain" ? "in the keychain" : "until idle";
-        ImGui::TextDisabled("It will be remembered %s (Settings → Security).", how);
+        if (a.cfg.security.remember == "ask")
+            ImGui::TextDisabled("The key is used for this operation only (Settings → Security).");
+        else
+            ImGui::TextDisabled("The key stays loaded so sync keeps running; Lock only hides the window.");
         modal_error(a);
         ImGui::BeginDisabled(a.modal_busy || !a.pw1[0]);
         if (ImGui::Button("Unlock") || (enter && a.pw1[0] && !a.modal_busy)) {
@@ -1094,14 +1030,20 @@ void draw_modals(App& a) {
     }
 
     if (begin_modal(a, "new-folder", "New folder")) {
-        ImGui::TextDisabled("In /%s", a.current_dir.c_str());
+        if (ImGui::IsWindowAppearing()) snprintf(a.dir_buf, sizeof a.dir_buf, "%s", a.current_dir.c_str());
+        ImGui::SetNextItemWidth(360);
+        ImGui::InputTextWithHint("In folder", "(vault root)", a.dir_buf, sizeof a.dir_buf);
         ImGui::SetNextItemWidth(360);
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         bool enter = ImGui::InputText("Name", a.text_buf, sizeof a.text_buf, ImGuiInputTextFlags_EnterReturnsTrue);
         modal_error(a);
         if ((ImGui::Button("Create") || enter) && a.text_buf[0] && !a.modal_busy) {
-            std::string path = join_logical(a.current_dir, trim(a.text_buf));
-            run_modal_job(a, [v, path] { OpResult r = v->mkdir(path); if (r.ok) v->refresh(); return r; }, [&a] { a.tree_dirty = true; });
+            std::string parent = trim(a.dir_buf);
+            while (!parent.empty() && (parent.front() == '/')) parent.erase(0, 1);
+            while (!parent.empty() && (parent.back() == '/')) parent.pop_back();
+            std::string path = join_logical(parent, trim(a.text_buf));
+            run_modal_job(a, [v, path] { OpResult r = v->mkdir(path); if (r.ok) v->refresh(); return r; },
+                          [&a, path] { a.tree_dirty = true; a.force_open.insert(path_dirname(path)); });
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) close_modal(a);
@@ -1288,120 +1230,34 @@ void draw_modals(App& a) {
         ImGui::EndPopup();
     }
 
-    if (begin_modal(a, "edit-changed", "Save changes?")) {
-        EditSession s;
-        bool have = a.edits->get(a.edit_prompt_id, s);
-        ImGui::TextWrapped("%s was changed in the editor. Save it back to the vault?", have ? s.logical.c_str() : "The file");
-        modal_error(a);
-        ImGui::BeginDisabled(a.modal_busy || !have);
-        auto em = a.edits;
-        int id = a.edit_prompt_id;
-        if (ImGui::Button(ICON_FA_CLOUD_ARROW_UP " Save back")) {
-            a.edits->clear_prompt(id);
-            a.modal_busy = true;
-            a.run_job([&a, em, id] {
-                OpResult r = em->save_back(id);
-                a.post([&a, r, id] {
-                    a.modal_busy = false;
-                    if (r.ok) { a.modal.clear(); a.notify("Saved to the vault"); a.tree_dirty = true; if (a.engine) a.engine->request_sync(); }
-                    else if (r.precondition_failed) { a.edit_prompt_id = id; a.modal = "edit-conflict"; }
-                    else a.modal_error = r.error;
-                });
-            });
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Keep editing")) { a.edits->clear_prompt(id); close_modal(a); }
-        ImGui::SameLine();
-        if (ImGui::Button("Discard changes")) { a.edits->discard(id); close_modal(a); }
-        ImGui::EndDisabled();
-        if (a.modal != "edit-changed") close_modal(a);
-        ImGui::EndPopup();
-    }
-
-    if (begin_modal(a, "edit-conflict", "Changed on the server")) {
-        EditSession s;
-        a.edits->get(a.edit_prompt_id, s);
-        ImGui::TextWrapped("%s was changed on the server since you opened it.", s.logical.c_str());
+    if (begin_modal(a, "quit-unsaved", "Unsaved edits")) {
+        ImGui::TextWrapped("Some files in the editor have unsaved changes.");
         modal_error(a);
         auto em = a.edits;
-        int id = a.edit_prompt_id;
-        auto after = [&a](const char* msg) { return [&a, msg] { a.notify(msg); a.tree_dirty = true; if (a.engine) a.engine->request_sync(); }; };
-        ImGui::BeginDisabled(a.modal_busy);
-        if (ImGui::Button("Keep both")) run_modal_job(a, [em, id] { return em->save_as_copy(id); }, after("Saved your version as a copy"));
-        ImGui::SameLine();
-        if (ImGui::Button("Overwrite server")) run_modal_job(a, [em, id] { return em->save_back(id, true); }, after("Saved over the server version"));
-        ImGui::SameLine();
-        if (ImGui::Button("Reload server version")) run_modal_job(a, [em, id] { return em->reload(id); }, after("Reloaded; your edits were discarded"));
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) close_modal(a);
-        ImGui::EndDisabled();
-        if (a.modal != "edit-conflict") close_modal(a);
-        ImGui::EndPopup();
-    }
-
-    if (begin_modal(a, "edit-discard", "Discard changes?")) {
-        ImGui::Text("Throw away the unsaved changes?");
-        if (ImGui::Button("Discard")) { a.edits->discard(a.edit_prompt_id); close_modal(a); }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) close_modal(a);
-        ImGui::EndPopup();
-    }
-
-    if (begin_modal(a, "force-edit", "Open as text?")) {
-        ImGui::TextWrapped("%s does not look like a text file. Open it in the text editor anyway? Saving binary files from a text editor can damage them.",
-                           a.modal_arg.c_str());
-        if (ImGui::Button("Open anyway")) {
-            const Node* n = find_node(a.tree.get(), a.modal_arg);
-            close_modal(a);
-            if (n && !n->dir) open_in_editor(a, n->entry, true);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) close_modal(a);
-        ImGui::EndPopup();
-    }
-
-    if (begin_modal(a, "open-warning", "Open with another app")) {
-        ImGui::TextWrapped("The decrypted copy is written to %s and wiped when you lock or quit. The other app may keep its own copies "
-                           "(recent files, thumbnails, autosave), which s3vault cannot remove.",
-                           platform::session_tmp_in_ram() ? "RAM (tmpfs)" : "a temporary folder");
-        if (ImGui::Button("Open")) {
-            a.open_warning_shown = true;
-            std::string target = a.modal_arg;
-            close_modal(a);
-            if (const Node* n = find_node(a.tree.get(), target); n && !n->dir) open_externally(a, n->entry);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) close_modal(a);
-        ImGui::EndPopup();
-    }
-
-    if (begin_modal(a, "lock-unsaved", "Unsaved edits") || begin_modal(a, "quit-unsaved", "Unsaved edits")) {
-        bool quit = a.modal == "quit-unsaved";
-        ImGui::TextWrapped("Some files open in the editor have unsaved changes.");
-        modal_error(a);
-        auto em = a.edits;
-        ImGui::BeginDisabled(a.modal_busy);
+        ImGui::BeginDisabled(a.modal_busy || !em);
         if (ImGui::Button("Save all")) {
-            run_modal_job(a, [em] {
-                for (auto& s : em->sessions())
-                    if (s.changed) {
-                        OpResult r = em->save_back(s.id);
-                        if (!r.ok) return OpResult::fail(s.logical + ": " + r.error);
-                    }
+            std::vector<std::pair<int, std::string>> todo;
+            for (int id : em->ids())
+                if (EditDoc* d = em->doc(id); d && d->dirty()) todo.push_back({id, d->text});
+            run_modal_job(a, [em, todo] {
+                for (auto& [id, text] : todo) {
+                    OpResult r = em->save(id, text);
+                    if (!r.ok) return OpResult::fail(em->doc(id) ? em->doc(id)->logical + ": " + r.error : r.error);
+                    em->apply_saved(id, text, r.etag);
+                }
                 return OpResult::success();
-            }, [&a, quit] { if (quit) a.quit_confirmed = true; else lock_vault(a, true); });
+            }, [&a] { a.quit_confirmed = true; });
         }
         ImGui::SameLine();
         if (ImGui::Button("Discard all")) {
-            a.edits->close_all();
+            em->close_all();
             close_modal(a);
-            if (quit) a.quit_confirmed = true;
-            else lock_vault(a, true);
+            a.quit_confirmed = true;
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) { a.quit_requested = false; close_modal(a); }
         ImGui::EndDisabled();
-        if (a.modal != "lock-unsaved" && a.modal != "quit-unsaved") close_modal(a);
+        if (a.modal != "quit-unsaved") close_modal(a);
         ImGui::EndPopup();
     }
 }

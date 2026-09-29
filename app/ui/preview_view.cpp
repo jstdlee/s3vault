@@ -44,7 +44,7 @@ void preview_free(App& a) {
     p.line_starts.clear();
     p.line_starts.shrink_to_fit();
     delete_texture(p);
-    p.pdf.reset();  // PdfDoc's destructor scrubs its temp file once no render job holds it
+    p.pdf.reset();  // PdfDoc wipes its in-memory copy once no render job holds it
     p.state = PreviewState::Empty;
     p.kind = PreviewKind::None;
     p.error.clear();
@@ -156,7 +156,7 @@ void preview_load(App& a, const RemoteEntry& e) {
         std::string err = r.error;
         if (r.ok && kind == PreviewKind::Pdf) {
             doc = std::make_unique<PdfDoc>();
-            if (!doc->open(bytes, err)) doc.reset();
+            if (!doc->open(std::move(bytes), err)) doc.reset();
             wipe(bytes);
         }
         a.post([&a, gen, kind, r, err, bytes = std::move(bytes), doc = std::shared_ptr<PdfDoc>(doc.release())]() mutable {
@@ -275,7 +275,7 @@ void draw_preview(App& a, const Node* sel) {
             return;
         case PreviewState::Error:
             ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", p.error.c_str());
-            if (p.too_large && ImGui::Button(ICON_FA_FILE_EXPORT " Open with default app instead")) open_externally(a, sel->entry);
+            if (p.too_large) ImGui::TextDisabled("Use Download to save a copy where you choose.");
             return;
         default: break;
     }

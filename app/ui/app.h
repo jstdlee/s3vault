@@ -127,13 +127,19 @@ struct App {
     std::string modal_arg;
     char pw1[256] = "", pw2[256] = "", pw_old[256] = "";
     char text_buf[1024] = "";
+    char dir_buf[1024] = "";
     std::string modal_error;
     bool modal_busy = false;
     std::vector<std::string> pending_uploads;  // local paths waiting for the upload dialog
     bool upload_encrypt = true;
     int upload_on_exists = 0;  // 0 ask→ overwrite, 1 keep both, 2 skip
-    int edit_prompt_id = 0;
-    bool open_warning_shown = false;
+    int edit_focus = 0;       // editor document to bring to front
+    int edit_close_id = 0;    // document waiting for the "unsaved changes" answer
+    // Window lock (the key stays loaded; sync continues)
+    bool ui_locked = false;
+    char lock_pw[256] = "";
+    std::string lock_error;
+    bool lock_busy = false;
     bool quit_requested = false, quit_confirmed = false;
 
     // Settings form
@@ -165,21 +171,23 @@ void app_frame(App& a);
 void app_shutdown(App& a);
 void connect_async(App& a);
 void rebuild_tree(App& a);
-void lock_vault(App& a, bool manual);
+void lock_ui(App& a, const char* why);
+void forget_key(App& a);
+void draw_lock_screen(App& a);
 
 // panels.cpp
 void draw_vault_tab(App& a);
 void draw_folders_tab(App& a);
 void draw_conflicts_tab(App& a);
 void draw_transfers_tab(App& a);
-void draw_edits_tab(App& a);
+void draw_edits_tab(App& a);  // editor_view.cpp
+void save_all_docs(App& a);
 void draw_settings_tab(App& a);
 void draw_modals(App& a);
 void start_uploads(App& a, const std::vector<std::string>& files);
 // on_exists: 0 overwrite, 1 keep both, 2 skip
 void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, bool encrypt, int on_exists);
-void open_in_editor(App& a, const RemoteEntry& e, bool force);
-void open_externally(App& a, const RemoteEntry& e);
+void open_in_editor(App& a, const RemoteEntry& e);
 const char* type_icon(const std::string& logical, bool dir, bool open);
 bool strength_meter(const char* pw, int min_len);
 

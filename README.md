@@ -10,10 +10,10 @@ Linux desktop app: C++17, Dear ImGui, GLFW, OpenGL 3.3. This is the same stack a
 - **Vault browser.** A tree of folders and files with type icons, sortable by name, type, size, last modified and sync status. You can filter by name or by type (text, images, PDF, encrypted).
 - **File operations.** Upload (built-in file browser with multi-select, or drag and drop; folders included), new folder, rename/move (a server-side copy, so nothing is re-uploaded), delete to the vault trash, restore, and download to a location you choose.
 - **Preview on click only.** Supported types are text/code, images (png/jpg/gif/bmp/tga/psd) and PDF (one page at a time). Nothing is downloaded or decrypted until you ask. There are hard size limits. The plaintext is wiped when the preview closes, when you select something else, when the vault locks, or after 2 minutes idle.
-- **Edit in your text editor.** The file is decrypted to RAM (tmpfs) and opened in `$VISUAL`, `$EDITOR` or the desktop default. **Force open** also works for non-text files. On the first real change you get a prompt: **Save back / Keep editing / Discard**. If the server copy changed since you opened it, you choose **Keep both / Overwrite server / Reload server version**.
+- **Built-in viewer and editor only.** Text, image and PDF previews and the text editor all run inside s3vault. Decrypted content stays in memory: it is never written to disk and never handed to another program (there is no "open with"). PDFs are piped to poppler through `fd://0`. The editor (Editor tab, Ctrl+S) saves back with `If-Match`. If the server copy changed since you opened it, you choose **Keep both / Overwrite server / Reload server version**. Closing with unsaved changes asks first.
 - **Conflicts.** A file changed on two devices, or changed on one and deleted on the other, is listed under **Conflicts**, grouped by tracked folder → parent folder → file. Checkboxes at every level let you apply **Keep both / Overwrite server / Overwrite local / Keep newest** to a whole group. **Compare** shows the two versions side by side.
-- **Password lifecycle.** New passwords need at least 14 characters and must pass a strength check; there is a generator too. You choose how long the password is remembered: ask every time, until lock/quit, until idle for N minutes (default 15), or in the keychain for N days. **Lock** is available at any time.
-- **Dependencies are configurable:** gpg, pdftoppm, the opener, the editor and the terminal. The S3 secret goes in the keychain (libsecret), or in `$S3VAULT_SECRET_KEY`.
+- **Password and lock.** New passwords need at least 14 characters and must pass a strength check; there is a generator too. **Lock** (manually, or after N idle minutes) hides the window behind a password screen, but the vault key stays in locked memory so sync, including encrypted files, keeps running. **Forget vault key** stops encrypted sync until you unlock. The key can also be kept in the keychain for N days.
+- **Dependencies are configurable:** the `gpg` and `pdftoppm` paths. The S3 secret goes in the keychain (libsecret), or in `$S3VAULT_SECRET_KEY`.
 
 ## How it works
 
@@ -74,16 +74,9 @@ gpg -d notes.md.gpg            # enter the vault key as the passphrase
 - File and folder names, sizes and timestamps. This is by design, so the browser can list the vault without decrypting anything.
 - A malicious server could swap two encrypted files of the same vault, or serve an older version. Per-file encryption without a signed index cannot detect that.
 
-### Temporary plaintext
+### No temporary plaintext
 
-Decrypted copies for editing, opening in another app, and PDF pages live in `$XDG_RUNTIME_DIR/s3vault/<pid>/`: tmpfs (RAM), mode 0700.
-
-**When they are wiped**
-- On quit (including SIGINT, SIGTERM and SIGHUP), on lock, and when the password expires.
-- Folders left behind by a crashed instance are removed on the next start.
-- Unsaved edits survive an automatic idle lock, so nothing is lost; unlock again to save them.
-
-**Limit:** apps you open files with may keep their own copies (thumbnails, recent files), which s3vault cannot remove.
+Previews, PDF rendering and editing all work in memory, and buffers are wiped when closed. The only way decrypted data reaches the disk is **Download**, to a place you choose, and sync into your tracked folders, which is the point of syncing.
 
 ## Build
 
@@ -136,7 +129,7 @@ s3vault-cli --help
   roots · add-root <dir> [--remote P] [--direction D] [--plain] · rm-root · pause · resume
   sync · watch
   ls [dir] [--sort name|type|size|modified] [--reverse] [-r]
-  put <file> [vault-path] [--plain|--encrypt] [--overwrite] · get · cat · mkdir · mv · rm · edit
+  put <file> [vault-path] [--plain|--encrypt] [--overwrite] · get · cat · mkdir · mv · rm
   trash · restore <n> · purge [days]
   conflicts · resolve <id|all> keep-local|keep-remote|keep-both|keep-newest
 ```
@@ -156,13 +149,12 @@ tests/r2_integration.sh        # end-to-end against a real bucket, two simulated
 - both-modified and modify/delete conflicts, and their resolution
 - concurrent writers
 - the CLI file operations
-- edit and save back, including when the server copy changed meanwhile
 - tamper rejection, password change
 - a 70 MiB multipart file, plain folders
 
 **GUI smoke test**
 - `s3vault --script "idle;expand:Docs;select:Docs/a.png;preview;idle;shot:/tmp/a.png;quit"` drives the UI without synthetic input and saves screenshots.
-- On exit, script mode prints the slowest UI frame. All network, crypto, listing and tree building runs on worker threads: syncing 360 MB kept every frame under 100 ms, and reconnecting or quitting mid-upload aborts transfers instead of waiting.
+- Script windows are invisible, so tests never show up on your desktop. On exit, script mode prints the slowest UI frame. All network, crypto, listing and tree building runs on worker threads: syncing 360 MB kept every frame under 100 ms, and reconnecting or quitting mid-upload aborts transfers instead of waiting.
 
 ## Source layout
 

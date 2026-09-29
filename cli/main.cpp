@@ -13,7 +13,6 @@
 
 #include "config/config.h"
 #include "crypto/gpg.h"
-#include "edit/edit.h"
 #include "index/db.h"
 #include "platform.h"
 #include "preview/preview.h"
@@ -58,7 +57,6 @@ Vault files (paths are inside the vault)
   get <vault-path> [local-dest]
   cat <vault-path>              decrypt to stdout (text, ≤ preview.text_max_mb)
   mkdir <dir> | mv <from> <to> | rm <path>
-  edit <vault-path>             open in your editor; asks to save back when it changed
   trash | restore <n> | purge [days]
   conflicts | resolve <id> keep-local|keep-remote|keep-both|keep-newest
 
@@ -326,8 +324,6 @@ int main(int argc, char** argv) {
         std::string p = find_executable(c.cfg.deps.pdftoppm == "auto" ? "pdftoppm" : c.cfg.deps.pdftoppm);
         printf("pdftoppm   %s\n", p.empty() ? "missing (PDF preview disabled; install poppler-utils)" : p.c_str());
         printf("pdfinfo    %s\n", find_executable("pdfinfo").empty() ? "missing" : find_executable("pdfinfo").c_str());
-        printf("opener     %s\n", c.cfg.deps.opener.c_str());
-        printf("editor     %s\n", c.cfg.deps.editor.c_str());
         printf("keychain   %s\n", platform::keychain_available() ? "Secret Service (libsecret)" : "not available");
         printf("tmp dir    %s (%s)\n", platform::session_tmp_dir().c_str(),
                platform::session_tmp_in_ram() ? "RAM/tmpfs" : "DISK — files are overwritten before deletion");
@@ -510,7 +506,7 @@ int main(int argc, char** argv) {
         printf("uploaded %s%s\n", dest.c_str(), encrypt ? " (encrypted)" : "");
         return 0;
     }
-    if (cmd == "get" || cmd == "cat" || cmd == "edit") {
+    if (cmd == "get" || cmd == "cat") {
         if (a.empty()) return die("usage: " + cmd + " <vault-path>");
         std::vector<RemoteEntry> all;
         OpResult lr = v.refresh(&all);
@@ -526,7 +522,7 @@ int main(int argc, char** argv) {
             printf("saved %s\n", dest.c_str());
             return 0;
         }
-        if (cmd == "cat") {
+        {  // cat
             std::string out;
             OpResult r = load_preview_bytes(v, *e, PreviewLimits::from(c.cfg.preview).text_max, out);
             if (!r.ok) return die(r.error);
@@ -534,41 +530,6 @@ int main(int argc, char** argv) {
             wipe(out);
             return 0;
         }
-        EditManager em(c.cfg, v);
-        std::string err;
-        int id = em.open(*e, err);
-        if (!id) return die(err);
-        EditSession s;
-        em.get(id, s);
-        if (!s.error.empty()) fprintf(stderr, "could not start the editor (%s); edit %s yourself\n", s.error.c_str(), s.path.c_str());
-        fprintf(stderr, "Editing %s — press Enter when you are done.\n", e->logical.c_str());
-        std::string line;
-        std::getline(std::cin, line);
-        em.poll();
-        em.get(id, s);
-        if (!s.changed) {
-            printf("No changes.\n");
-            em.discard(id);
-            return 0;
-        }
-        fprintf(stderr, "%s was changed. Save it back to the vault? [y/N] ", e->logical.c_str());
-        std::getline(std::cin, line);
-        if (line != "y" && line != "Y") {
-            em.discard(id);
-            printf("Discarded.\n");
-            return 0;
-        }
-        OpResult r = em.save_back(id);
-        if (!r.ok && r.precondition_failed) {
-            fprintf(stderr, "The server copy changed since you opened it. [o]verwrite, [k]eep both, [d]iscard? ");
-            std::getline(std::cin, line);
-            if (line == "o") r = em.save_back(id, true);
-            else if (line == "k") r = em.save_as_copy(id);
-            else { em.discard(id); printf("Discarded.\n"); return 0; }
-        }
-        em.discard(id);
-        if (!r.ok) return die(r.error);
-        printf("Saved.\n");
         return 0;
     }
     if (cmd == "mkdir") {

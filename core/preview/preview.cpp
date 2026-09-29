@@ -101,18 +101,11 @@ OpResult load_preview_bytes(Vault& v, const RemoteEntry& e, size_t cap, std::str
     return v.download_to_memory(e.key, out, cap);
 }
 
-bool PdfDoc::open(const std::string& bytes, std::string& error) {
+bool PdfDoc::open(std::string bytes, std::string& error) {
     close();
-    std::string dir = platform::session_tmp_dir() + "/preview";
-    mkdirs(dir, 0700);
-    path_ = dir + "/" + to_hex(random_bytes(8)) + ".pdf";
-    if (!write_file_atomic(path_, bytes, 0600)) {
-        error = "cannot write preview file";
-        path_.clear();
-        return false;
-    }
+    bytes_ = std::move(bytes);
     std::string out, err;
-    int rc = run_capture({"pdfinfo", path_}, "", &out, &err, 1 << 20, 10000);
+    int rc = run_capture({"pdfinfo", "fd://0"}, bytes_, &out, &err, 1 << 20, 10000);
     if (rc != 0) {
         error = rc == -3 ? "pdfinfo timed out" : "not a readable PDF" + (err.empty() ? "" : ": " + trim(err));
         close();
@@ -129,15 +122,15 @@ bool PdfDoc::open(const std::string& bytes, std::string& error) {
 }
 
 bool PdfDoc::render(int page, int dpi, std::string& png, std::string& error) {
-    if (path_.empty()) { error = "no document"; return false; }
+    if (bytes_.empty()) { error = "no document"; return false; }
     std::string exe = find_executable("pdftoppm");
     if (exe.empty()) { error = "pdftoppm not found (install poppler-utils)"; return false; }
     std::string err;
     std::string p = std::to_string(page);
     // -scale-to bounds the long side (≈ dpi × 12 in, max 2400 px) whatever page size the file claims.
     int long_side = std::min(2400, dpi * 12);
-    int rc = run_capture({exe, "-png", "-singlefile", "-f", p, "-l", p, "-scale-to", std::to_string(long_side), path_},
-                         "", &png, &err, 64u << 20, 10000);
+    int rc = run_capture({exe, "-png", "-singlefile", "-f", p, "-l", p, "-scale-to", std::to_string(long_side), "fd://0"},
+                         bytes_, &png, &err, 64u << 20, 10000);
     if (rc != 0) {
         error = rc == -3 ? "page took too long to render" : rc == -2 ? "page image too large" : "pdftoppm failed: " + trim(err);
         png.clear();
@@ -147,8 +140,7 @@ bool PdfDoc::render(int page, int dpi, std::string& png, std::string& error) {
 }
 
 void PdfDoc::close() {
-    if (!path_.empty()) secure_unlink(path_);
-    path_.clear();
+    wipe(bytes_);
     pages_ = 0;
 }
 

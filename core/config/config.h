@@ -19,9 +19,6 @@ struct StorageConfig {
 struct DepsConfig {
     std::string gpg = "auto";
     std::string pdftoppm = "auto";
-    std::string opener = "xdg-open";
-    std::string editor = "auto";
-    std::string terminal = "x-terminal-emulator -e";
 };
 
 struct SecurityConfig {

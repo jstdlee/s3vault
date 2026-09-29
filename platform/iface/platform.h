@@ -33,10 +33,7 @@ int cleanup_stale_tmp();
 void install_exit_cleanup(std::function<void()> extra = {});
 
 // ---- Desktop integration ----
-bool open_external(const std::string& opener, const std::string& path);
-// Launch an editor on path (not waited for). `editor` "auto" → $VISUAL/$EDITOR/xdg default.
-bool launch_editor(const std::string& editor, const std::string& terminal, const std::string& path,
-                   std::string* error = nullptr);
+// (No "open with"/external editor on purpose: decrypted content is only viewed/edited inside s3vault.)
 // Move a local file to the desktop trash. False if not possible (caller may fall back to delete).
 bool trash_local(const std::string& path);
 // Blocking native dialogs (run from a worker thread). Empty on cancel.

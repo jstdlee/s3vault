@@ -162,6 +162,10 @@ OpResult Vault::set_password(const std::string& old_password, const std::string&
         return f;
     }
     has_key_ = true;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        key_ct_ = enc;
+    }
     std::string k = trim(vault_key.substr(strlen(kKeyMagic)));
     keys_.set(k);
     wipe(k);
@@ -184,6 +188,10 @@ OpResult Vault::unlock(const std::string& password) {
         return f;
     }
     if (!d.ok() || !starts_with(vault_key, kKeyMagic)) return OpResult::fail("cannot read key.gpg: " + d.detail);
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        key_ct_ = cur;
+    }
     std::string k = trim(vault_key.substr(strlen(kKeyMagic)));
     keys_.set(k);
     if (keys_.mode() == PassCache::Mode::Keychain && cfg_.security.keychain_days > 0)
@@ -192,6 +200,29 @@ OpResult Vault::unlock(const std::string& password) {
     wipe(vault_key);
     has_key_ = true;
     return OpResult::success();
+}
+
+OpResult Vault::verify_password(const std::string& password) {
+    std::string ct;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        ct = key_ct_;
+    }
+    if (ct.empty() || !unlocked()) return unlock(password);
+    std::string vault_key;
+    CryptoResult d = gpg_.decrypt_string(ct, vault_key, password, 4096);
+    if (d.status == CryptoStatus::BadPassphrase) {
+        OpResult f = OpResult::fail("wrong password");
+        f.bad_key = true;
+        return f;
+    }
+    if (!d.ok() || !starts_with(vault_key, kKeyMagic)) return OpResult::fail("cannot read key.gpg: " + d.detail);
+    std::string k = trim(vault_key.substr(strlen(kKeyMagic)));
+    bool same = keys_.get().view() == k;
+    wipe(k);
+    wipe(vault_key);
+    // The server's key.gpg may have been re-encrypted (password changed on another device): re-fetch.
+    return same ? OpResult::success() : unlock(password);
 }
 
 bool Vault::try_unlock_from_keychain() {
@@ -204,6 +235,10 @@ bool Vault::try_unlock_from_keychain() {
 
 void Vault::lock() {
     keys_.lock();
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        key_ct_.clear();
+    }
     platform::keychain_erase(vault_account());
 }
 
@@ -281,6 +316,34 @@ OpResult Vault::upload_file(const std::string& local, const std::string& key, co
     }
     S3Result r = s3_->put_file(key, src, c, progress);
     if (!staged.empty()) unlink(staged.c_str());
+    if (!r.ok()) {
+        OpResult f = OpResult::fail("upload " + key + ": " + r.describe());
+        f.precondition_failed = r.precondition_failed();
+        return f;
+    }
+    res.ok = true;
+    res.etag = r.etag;
+    return res;
+}
+
+OpResult Vault::upload_bytes(const std::string& data, const std::string& key, const Conditions& c) {
+    if (!s3_) return OpResult::fail("not connected");
+    OpResult res;
+    res.plain_hash = sha256_hex(data);
+    res.plain_size = data.size();
+    S3Result r;
+    if (ends_with(key, ".gpg")) {
+        SecureString k;
+        OpResult kr = need_key(k);
+        if (!kr.ok) return kr;
+        std::string ct;
+        CryptoResult e = gpg_.encrypt_string(data, ct, k.view());
+        keys_.release_if_ask();
+        if (!e.ok()) return OpResult::fail("encrypt: " + e.detail);
+        r = s3_->put_string(key, ct, c);
+    } else {
+        r = s3_->put_string(key, data, c);
+    }
     if (!r.ok()) {
         OpResult f = OpResult::fail("upload " + key + ": " + r.describe());
         f.precondition_failed = r.precondition_failed();

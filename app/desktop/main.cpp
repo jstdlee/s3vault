@@ -36,7 +36,7 @@ static ui::App* g_app = nullptr;
 
 // --script "step;step;…" drives the UI for screenshots and smoke tests without synthetic input:
 //   tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
-//   conflicts:all  compare  edit:<path>  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
+//   conflicts:all  compare  edit:<path>  type:<text>  save  lock  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
 struct Script {
     std::vector<std::string> steps;
     size_t i = 0;
@@ -89,7 +89,15 @@ static std::string script_step(Script& s, ui::App& a) {
             for (auto& k : a.db.conflicts()) a.conflict_sel.insert(k.id);
         } else if (cmd == "edit") {
             for (auto& e : a.vault->cached_entries())
-                if (e.logical == arg && !e.dir_marker) ui::open_in_editor(a, e, true);
+                if (e.logical == arg && !e.dir_marker) ui::open_in_editor(a, e);
+        } else if (cmd == "type") {  // append text to the focused editor document (smoke tests)
+            if (a.edits)
+                for (int id : a.edits->ids())
+                    if (EditDoc* d = a.edits->doc(id)) d->text += arg;
+        } else if (cmd == "save") {
+            ui::save_all_docs(a);
+        } else if (cmd == "lock") {
+            ui::lock_ui(a, nullptr);
         } else if (cmd == "upload") {
             ui::upload_files(a, {arg}, a.current_dir, a.vault_has_key, 1);
         } else if (cmd == "browse") {
@@ -98,8 +106,8 @@ static std::string script_step(Script& s, ui::App& a) {
         } else if (cmd == "unlock") {
             // Test-only: password from $S3VAULT_PASSWORD, never from the script text.
             if (const char* pw = getenv("S3VAULT_PASSWORD"); pw && a.vault) {
-                OpResult r = a.vault->unlock(pw);
-                if (r.ok) a.modal.clear();
+                OpResult r = a.ui_locked ? a.vault->verify_password(pw) : a.vault->unlock(pw);
+                if (r.ok) { a.modal.clear(); a.ui_locked = false; }
                 else fprintf(stderr, "script unlock: %s\n", r.error.c_str());
             }
         } else if (cmd == "reconnect") {
@@ -275,6 +283,9 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    // Script runs (tests, screenshots) use an invisible window so they never appear on — or take clicks from —
+    // the user's desktop.
+    if (!script.steps.empty()) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     glfwWindowHintString(GLFW_X11_CLASS_NAME, "s3vault");
     glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "s3vault");
     app.win = glfwCreateWindow(std::max(640, app.cfg.ui.width), std::max(420, app.cfg.ui.height), "s3vault", nullptr, nullptr);
@@ -288,7 +299,7 @@ int main(int argc, char** argv) {
     });
     glfwSetWindowCloseCallback(app.win, [](GLFWwindow* w) {
         if (g_app->quit_confirmed) return;
-        if (g_app->edits && g_app->edits->any_unsaved()) {
+        if (g_app->edits && g_app->edits->any_dirty()) {
             glfwSetWindowShouldClose(w, GLFW_FALSE);
             g_app->quit_requested = true;
             g_app->modal = "quit-unsaved";

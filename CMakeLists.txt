@@ -77,11 +77,11 @@ if(S3VAULT_GUI)
   set(IMGUI ${TP}/imgui)
   add_library(imgui STATIC
     ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
-    ${IMGUI}/backends/imgui_impl_glfw.cpp ${IMGUI}/backends/imgui_impl_opengl3.cpp)
+    ${IMGUI}/backends/imgui_impl_glfw.cpp ${IMGUI}/backends/imgui_impl_opengl3.cpp ${IMGUI}/misc/cpp/imgui_stdlib.cpp)
   target_include_directories(imgui PUBLIC ${IMGUI})
   target_link_libraries(imgui PUBLIC glfw)
 
-  add_executable(s3vault app/desktop/main.cpp app/ui/app.cpp app/ui/panels.cpp app/ui/preview_view.cpp app/ui/file_browser.cpp)
+  add_executable(s3vault app/desktop/main.cpp app/ui/app.cpp app/ui/panels.cpp app/ui/preview_view.cpp app/ui/file_browser.cpp app/ui/editor_view.cpp)
   target_include_directories(s3vault PRIVATE app/ui ${TP}/stb ${TP}/icons)
   target_compile_definitions(s3vault PRIVATE S3V_FONT_DIR="${CMAKE_INSTALL_PREFIX}/share/s3vault/fonts"
                              S3V_FONT_DIR_BUILD="${TP}/fonts")
