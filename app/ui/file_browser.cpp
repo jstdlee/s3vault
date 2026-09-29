@@ -75,7 +75,7 @@ void list(Browser& b) {
         if (x.dir != y.dir) return x.dir;
         return strcasecmp(x.name.c_str(), y.name.c_str()) < 0;
     });
-    snprintf(b.path_buf, sizeof b.path_buf, "%s", b.cwd.c_str());
+    snprintf(b.path_buf, sizeof b.path_buf, "%s", display_path(b.cwd).c_str());  // "~" is expanded on Enter
 }
 
 void go(Browser& b, std::string dir) {

@@ -114,6 +114,13 @@ std::string home_dir() {
     return "/tmp";
 }
 
+std::string display_path(const std::string& path) {
+    std::string h = home_dir();
+    if (h.size() > 1 && (path == h || (path.size() > h.size() && path.compare(0, h.size(), h) == 0 && path[h.size()] == '/')))
+        return "~" + path.substr(h.size());
+    return path;
+}
+
 bool copy_file(const std::string& from, const std::string& to) {
     std::string data;
     if (!read_file(from, data)) return false;

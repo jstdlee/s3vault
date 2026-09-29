@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "platform.h"
+#include "util/fs.h"
 #include "util/strings.h"
 
 namespace s3v::ui {
@@ -279,7 +280,7 @@ static std::map<std::string, std::string> compute_status(Db& db, const std::vect
 static void mark_tracked(Node* n, const std::vector<RootRow>& roots) {
     for (auto& r : roots) {
         std::string p = r.remote_prefix;
-        std::string info = r.local_path + " · " + r.direction + (r.paused ? " · paused" : "");
+        std::string info = display_path(r.local_path) + " · " + r.direction + (r.paused ? " · paused" : "");
         if (!n->logical.empty() && n->logical == p) { n->tracked_root = n->tracked = true; n->tracked_info = info; }
         else if (p.empty() ? !n->logical.empty() : starts_with(n->logical, p + "/")) { n->tracked = true; n->tracked_info = info; }
     }
@@ -399,6 +400,7 @@ void draw_lock_screen(App& a) {
                 a.lock_busy = false;
                 if (r.ok) {
                     a.ui_locked = false;
+                    a.tree_dirty = true;
                     a.last_input = glfwGetTime();
                 } else {
                     a.lock_error = r.error;

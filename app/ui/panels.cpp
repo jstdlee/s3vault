@@ -224,7 +224,7 @@ void download_all(App& a, const std::string& dest_parent, bool decrypt) {
         int nok = ok, nf = failed;
         eng->log("download all finished: " + std::to_string(nok) + " ok, " + std::to_string(nf) + " failed → " + dest);
         a.post([&a, nok, nf, dest] {
-            a.notify("Downloaded " + std::to_string(nok) + " file(s) to " + dest + (nf ? " — " + std::to_string(nf) + " failed (see Transfers)" : ""), nf > 0);
+            a.notify("Downloaded " + std::to_string(nok) + " file(s) to " + display_path(dest) + (nf ? " — " + std::to_string(nf) + " failed (see Transfers)" : ""), nf > 0);
         });
     });
 }
@@ -637,8 +637,8 @@ void draw_folders_tab(App& a) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             bool exists = stat_path(r.local_path, true).is_dir;
-            if (!exists) ImGui::TextColored(kErr, ICON_FA_TRIANGLE_EXCLAMATION " %s (missing)", r.local_path.c_str());
-            else ImGui::TextUnformatted(r.local_path.c_str());
+            if (!exists) ImGui::TextColored(kErr, ICON_FA_TRIANGLE_EXCLAMATION " %s (missing)", display_path(r.local_path).c_str());
+            else ImGui::TextUnformatted(display_path(r.local_path).c_str());
             ImGui::TableNextColumn();
             ImGui::Text("/%s", r.remote_prefix.c_str());
             ImGui::TableNextColumn();
@@ -741,7 +741,7 @@ void draw_conflicts_tab(App& a) {
         ImGui::TableHeadersRow();
         for (auto& [root_id, dirs] : groups) {
             std::string rp = "?";
-            for (auto& r : roots) if (r.id == root_id) rp = r.local_path;
+            for (auto& r : roots) if (r.id == root_id) rp = display_path(r.local_path);
             std::vector<const ConflictRow*> all_root;
             for (auto& [d, v] : dirs) all_root.insert(all_root.end(), v.begin(), v.end());
             ImGui::TableNextRow();
@@ -1033,7 +1033,7 @@ void draw_settings_tab(App& a) {
     ImGui::SameLine();
     if (ImGui::Button("Revert")) a.form = a.cfg;
     ImGui::SameLine();
-    ImGui::TextDisabled("%s", config_path().c_str());
+    ImGui::TextDisabled("%s", display_path(config_path()).c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,6 +1127,7 @@ void draw_modals(App& a) {
             run_modal_job(a, [v, pw]() mutable { OpResult r = v->unlock(pw); wipe(pw); return r; },
                           [&a] {
                               a.notify("Vault unlocked");
+                              a.tree_dirty = true;  // statuses such as "Locked" depend on the key
                               if (a.engine) a.engine->request_sync();
                               if (!a.pending_uploads.empty()) a.modal = "upload";  // continue where the user was
                           });
@@ -1300,7 +1301,7 @@ void draw_modals(App& a) {
     }
 
     if (begin_modal(a, "add-root", "Track a folder")) {
-        ImGui::Text("Local folder: %s", a.modal_arg.c_str());
+        ImGui::Text("Local folder: %s", display_path(a.modal_arg).c_str());
         ImGui::SetNextItemWidth(360);
         ImGui::InputText("Vault path", a.text_buf, sizeof a.text_buf);
         const char* dirs[] = {"two-way", "upload-only", "download-only"};

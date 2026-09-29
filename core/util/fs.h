@@ -28,6 +28,8 @@ void secure_unlink(const std::string& path);
 void remove_tree(const std::string& path, bool scrub = false);
 bool is_tmpfs(const std::string& path);
 std::string home_dir();
+// "/home/me/Documents" → "~/Documents" (for display only).
+std::string display_path(const std::string& path);
 bool copy_file(const std::string& from, const std::string& to);
 
 }  // namespace s3v

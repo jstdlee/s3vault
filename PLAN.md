@@ -15,7 +15,11 @@ Where the implementation differs from the text below:
   mode 3 with 65M iterations.
 - gpg's status output must include `DECRYPTION_OKAY` plus `GOODMDC`/AEAD. Otherwise a planted plain OpenPGP literal
   packet would decrypt "successfully".
-- The desktop `--script` option drives the UI and saves screenshots, for smoke tests without synthetic input.
+- The desktop `--script` option drives the UI and saves screenshots (invisible window) for smoke tests.
+- Viewing and editing are built in (in-memory editor, PDF via `fd://0`); the external editor/opener and every
+  decrypted temp file were removed (§8.3/§8.4 are superseded).
+- Lock hides the window only; the vault key stays loaded so sync continues. Key export (backup key file / recovery
+  key) and "download all" (decrypted or as stored) were added. License: GPL-3.0.
 
 Next: phase 3 (hardening: crash/resume of large transfers, a trash purge schedule, fuzzing the preview loaders),
 then phase 4 (macOS/Windows backends) and phase 5 (Flutter + RNP).

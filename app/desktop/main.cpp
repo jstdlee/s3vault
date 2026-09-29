@@ -36,7 +36,7 @@ static ui::App* g_app = nullptr;
 
 // --script "step;step;…" drives the UI for screenshots and smoke tests without synthetic input:
 //   tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
-//   conflicts:all  compare  edit:<path>  type:<text>  save  lock  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
+//   conflicts:all  compare  edit:<path>  type:<text>  save  lock  form:<key>=<value>  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
 struct Script {
     std::vector<std::string> steps;
     size_t i = 0;
@@ -97,6 +97,9 @@ static std::string script_step(Script& s, ui::App& a) {
         } else if (cmd == "download-all") {  // download-all:<dir>|<decrypted|encrypted>
             size_t bar = arg.find('|');
             ui::download_all(a, arg.substr(0, bar), bar == std::string::npos || arg.substr(bar + 1) != "encrypted");
+        } else if (cmd == "form") {  // form:<key>=<value>: fill the Settings form only (e.g. placeholders for screenshots)
+            size_t eq = arg.find('=');
+            if (eq != std::string::npos) a.form.set(arg.substr(0, eq), arg.substr(eq + 1));
         } else if (cmd == "save") {
             ui::save_all_docs(a);
         } else if (cmd == "lock") {
@@ -105,12 +108,17 @@ static std::string script_step(Script& s, ui::App& a) {
             ui::upload_files(a, {arg}, a.current_dir, a.vault_has_key, 1);
         } else if (cmd == "browse") {
             ui::BrowseMode m = arg == "folder" ? ui::BrowseMode::Folder : arg == "save" ? ui::BrowseMode::Save : ui::BrowseMode::OpenMany;
-            ui::browse(a, m, "Script", [](std::vector<std::string>) {}, "example.txt");
+            ui::browse(a, m, m == ui::BrowseMode::Folder ? "Choose a folder to sync" : "Upload to /", [](std::vector<std::string>) {}, "example.txt");
         } else if (cmd == "unlock") {
             // Test-only: password from $S3VAULT_PASSWORD, never from the script text.
             if (const char* pw = getenv("S3VAULT_PASSWORD"); pw && a.vault) {
                 OpResult r = a.ui_locked ? a.vault->verify_password(pw) : a.vault->unlock(pw);
-                if (r.ok) { a.modal.clear(); a.ui_locked = false; }
+                if (r.ok) {
+                    a.modal.clear();
+                    a.ui_locked = false;
+                    a.tree_dirty = true;
+                    if (a.engine) a.engine->request_sync();
+                }
                 else fprintf(stderr, "script unlock: %s\n", r.error.c_str());
             }
         } else if (cmd == "reconnect") {
