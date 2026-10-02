@@ -49,8 +49,11 @@ struct SyncConfig {
 struct UiConfig {
     std::string columns = "name,type,size,modified,status";
     std::string sort = "name:asc";
-    int width = 1100, height = 720;
+    int width = 1280, height = 800;
     float font_size = 15.0f;
+    std::string theme = "system";  // system | light | dark
+    int inspector = 1;             // show the inspector pane
+    int advanced = 0;              // "Show advanced settings"
 };
 
 struct Config {

@@ -17,6 +17,7 @@
 #include "index/db.h"
 #include "preview/preview.h"
 #include "sync/engine.h"
+#include "theme.h"
 #include "vault/vault.h"
 
 struct GLFWwindow;
@@ -84,6 +85,8 @@ struct Session {
     }
 };
 
+enum class View { Files, Trash, Transfers, Conflicts, Editor, Settings };
+
 struct App {
     GLFWwindow* win = nullptr;
     Config cfg;
@@ -99,12 +102,20 @@ struct App {
     std::atomic<Conn> conn{Conn::Unconfigured};
     std::string conn_error;
     bool vault_has_key = false;
+    bool browse_locked = false;  // user chose to look around without unlocking (names only)
 
-    // Tree
+    // Navigation (Finder model: you are always "in" a folder; new items go there)
+    View view = View::Files;
+    std::string cwd;                       // current vault folder ("" = root)
+    std::vector<std::string> back, fwd;    // history
+    float sidebar_w = 232, inspector_w = 330;
+    bool focus_search = false;
+
+    // Tree (whole vault; the list shows the subtree of cwd)
     std::unique_ptr<Node> tree;
     std::string selected;          // logical path of the selected node
     std::set<std::string> multi;   // multi-selection (files and folders)
-    std::string current_dir;       // folder that uploads / new folder go to
+    std::string current_dir;       // = cwd (kept for code that predates navigation)
     int sort_col = 0;
     bool sort_desc = false;
     char filter[128] = "";
@@ -118,26 +129,27 @@ struct App {
 
     Preview preview;
 
-    // Tabs
-    int tab = 0;  // 0 vault, 1 folders, 2 conflicts, 3 transfers, 4 edits, 5 settings
-    int want_tab = -1;
-
     // Conflicts selection
     std::set<int64_t> conflict_sel;
 
-    // Modals
-    std::string modal;  // current modal id; "" none
+    // Vault trash
+    std::vector<TrashEntry> trash;
+    std::set<std::string> trash_sel;  // trash object keys
+    bool trash_dirty = true, trash_loading = false;
+
+    // Sheets (modal dialogs)
+    std::string modal;  // current sheet id; "" none
     std::string modal_arg;
     char pw1[256] = "", pw2[256] = "", pw_old[256] = "";
     char text_buf[1024] = "";
     char dir_buf[1024] = "";
     std::string modal_error;
     bool modal_busy = false;
-    std::vector<std::string> pending_uploads;  // local paths waiting for the upload dialog
+    std::vector<std::string> pending_uploads;  // local paths waiting for the upload sheet
     bool upload_encrypt = true;
-    int upload_on_exists = 0;  // 0 ask→ overwrite, 1 keep both, 2 skip
-    int edit_focus = 0;       // editor document to bring to front
-    int edit_close_id = 0;    // document waiting for the "unsaved changes" answer
+    int upload_on_exists = 0;  // 0 replace, 1 keep both, 2 skip
+    int edit_focus = 0;        // editor document to bring to front
+    int edit_close_id = 0;     // document waiting for the "unsaved changes" answer
     // Window lock (the key stays loaded; sync continues)
     bool ui_locked = false;
     char lock_pw[256] = "";
@@ -145,8 +157,12 @@ struct App {
     bool lock_busy = false;
     bool quit_requested = false, quit_confirmed = false;
 
-    // Settings form
-    Config form;
+    // Setup assistant
+    int setup_step = 0;          // 0 storage, 1 vault password, 2 first folder
+    bool offer_first_folder = false;
+
+    // Settings
+    Config form;                 // storage fields being edited (applied with "Connect")
     char secret_buf[256] = "";
     std::string probe_report;
     bool probing = false;
@@ -168,7 +184,7 @@ struct App {
     void notify(const std::string& t, bool error = false);
 };
 
-// app.cpp
+// app.cpp — lifecycle, layout, sidebar, navigation
 void app_init(App& a);
 void app_frame(App& a);
 void app_shutdown(App& a);
@@ -176,25 +192,44 @@ void connect_async(App& a);
 void rebuild_tree(App& a);
 void lock_ui(App& a, const char* why);
 void forget_key(App& a);
+void navigate(App& a, const std::string& dir, bool record = true);
+void set_view(App& a, View v);
+bool key_needed(App& a);       // vault has a password but its key is not loaded
+void save_settings(App& a);    // persist a.cfg (and push live values into the running session)
+
+// screens.cpp — full-window states
+void draw_setup(App& a);
 void draw_lock_screen(App& a);
 
-// panels.cpp
-void draw_vault_tab(App& a);
-void draw_folders_tab(App& a);
-void draw_conflicts_tab(App& a);
-void draw_transfers_tab(App& a);
-void draw_edits_tab(App& a);  // editor_view.cpp
+// files_view.cpp
+void draw_files_view(App& a);
+// views.cpp
+void draw_conflicts_view(App& a);
+void draw_transfers_view(App& a);
+void draw_trash_view(App& a);
+// settings_view.cpp
+void draw_settings_view(App& a);
+void settings_connect(App& a);  // apply the storage form and reconnect
+void storage_fields(App& a);
+// editor_view.cpp
+void draw_edits_tab(App& a);
 void save_all_docs(App& a);
-void draw_settings_tab(App& a);
+// dialogs.cpp
 void draw_modals(App& a);
+bool strength_meter(const char* pw, int min_len);
+void password_pair(App& a, bool& acceptable);
+// ops.cpp — vault operations started from the UI
 void start_uploads(App& a, const std::vector<std::string>& files);
+void choose_and_upload(App& a);
 void download_all(App& a, const std::string& dest_parent, bool decrypt);
 void start_download_all(App& a, bool decrypt);
-// on_exists: 0 overwrite, 1 keep both, 2 skip
+// on_exists: 0 replace, 1 keep both, 2 skip
 void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, bool encrypt, int on_exists);
 void open_in_editor(App& a, const RemoteEntry& e);
-const char* type_icon(const std::string& logical, bool dir, bool open);
-bool strength_meter(const char* pw, int min_len);
+void download_to_dialog(App& a, const RemoteEntry& e);
+void add_tracked_folder(App& a);
+void refresh_listing(App& a);
+void test_storage(App& a);
 
 const Node* find_node(const Node* n, const std::string& logical);
 const char* status_help(const std::string& status);
@@ -208,7 +243,7 @@ void draw_file_browser(App& a);
 // preview_view.cpp
 void preview_load(App& a, const RemoteEntry& e);
 void preview_free(App& a);
-void draw_preview(App& a, const Node* sel);
+void draw_preview(App& a, const Node* sel, float height);
 void preview_tick(App& a);
 
 }  // namespace s3v::ui

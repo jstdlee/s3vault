@@ -53,6 +53,9 @@ std::vector<Field> fields(Config& c) {
         {"ui.width", nullptr, &c.ui.width},
         {"ui.height", nullptr, &c.ui.height},
         {"ui.font_size", nullptr, nullptr, &c.ui.font_size},
+        {"ui.theme", &c.ui.theme},
+        {"ui.inspector", nullptr, &c.ui.inspector},
+        {"ui.advanced", nullptr, &c.ui.advanced},
     };
 }
 

@@ -20,6 +20,8 @@ Where the implementation differs from the text below:
   decrypted temp file were removed (§8.3/§8.4 are superseded).
 - Lock hides the window only; the vault key stays loaded so sync continues. Key export (backup key file / recovery
   key) and "download all" (decrypted or as stored) were added. License: GPL-3.0.
+- UI redesigned macOS-style: sidebar + Finder-style list + inspector, sheets, a setup assistant, a lock screen, a vault
+  Trash view, settings cards that save as you go, and light and dark themes (app/ui/theme.* holds the design tokens and widgets).
 
 Next: phase 3 (hardening: crash/resume of large transfers, a trash purge schedule, fuzzing the preview loaders),
 then phase 4 (macOS/Windows backends) and phase 5 (Flutter + RNP).

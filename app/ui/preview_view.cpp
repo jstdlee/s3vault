@@ -226,81 +226,111 @@ void preview_tick(App& a) {
     }
 }
 
-static void image_view(Preview& p) {
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    float fit = std::min(avail.x / float(p.w), (avail.y - 4) / float(p.h));
+static void image_view(Preview& p, float height) {
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float fit = std::min(avail_w / float(p.w), (height - 4) / float(p.h));
     fit = std::min(fit, 1.0f);
     float z = p.zoom > 0 ? p.zoom : fit;
-    ImGui::BeginChild("img", ImVec2(0, 0), 0, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::Image(ImTextureRef((ImTextureID)(intptr_t)p.tex), ImVec2(float(p.w) * z, float(p.h) * z));
-    if (ImGui::IsWindowHovered() && ImGui::GetIO().KeyCtrl && ImGui::GetIO().MouseWheel != 0) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, P.track);
+    ImGui::BeginChild("img", ImVec2(avail_w, height), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+    ImVec2 sz(float(p.w) * z, float(p.h) * z);
+    ImVec2 c = ImGui::GetContentRegionAvail();
+    ImGui::SetCursorPos(ImVec2(std::max(0.0f, (c.x - sz.x) / 2), std::max(0.0f, (c.y - sz.y) / 2)));
+    ImGui::Image(ImTextureRef((ImTextureID)(intptr_t)p.tex), sz);
+    if (ImGui::IsWindowHovered() && ImGui::GetIO().KeyCtrl && ImGui::GetIO().MouseWheel != 0)
         p.zoom = std::clamp(z * (ImGui::GetIO().MouseWheel > 0 ? 1.15f : 1 / 1.15f), 0.05f, 8.0f);
-    }
     ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 
-void draw_preview(App& a, const Node* sel) {
+// Quick Look area inside the inspector: the content, then a slim control row (close, zoom, pages).
+void draw_preview(App& a, const Node* sel, float height) {
     Preview& p = a.preview;
     if (p.state == PreviewState::Empty) return;
     if (!sel || sel->logical != p.logical) return;
-    ImGui::Text("%s Preview", ICON_FA_EYE);
-    ImGui::SameLine();
-    if (ImGui::SmallButton(ICON_FA_XMARK " Close preview")) {
+    float w = ImGui::GetContentRegionAvail().x;
+    float body_h = height - ImGui::GetFrameHeight() - 8;
+    switch (p.state) {
+        case PreviewState::Loading: {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, P.track);
+            ImGui::BeginChild("##loading", ImVec2(w, body_h));
+            ImGui::SetCursorPos(ImVec2(w / 2 - 50, body_h / 2 - 10));
+            spinner(8, P.dim);
+            ImGui::SameLine();
+            ImGui::TextDisabled(sel->entry.encrypted ? "Decrypting…" : "Loading…");
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            break;
+        }
+        case PreviewState::Error: {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, P.track);
+            ImGui::BeginChild("##err", ImVec2(w, body_h));
+            ImGui::SetCursorPos(ImVec2(12, 12));
+            ImGui::PushTextWrapPos(w - 12);
+            ImGui::TextColored(P.red, ICON_FA_CIRCLE_EXCLAMATION "  %s", p.error.c_str());
+            if (p.too_large) ImGui::TextDisabled("Use Download to save a copy where you choose.");
+            ImGui::PopTextWrapPos();
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            break;
+        }
+        default:
+            if (p.kind == PreviewKind::Text) {
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, P.track);
+                ImGui::BeginChild("##text", ImVec2(w, body_h), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+                if (g_mono) ImGui::PushFont(g_mono, ImGui::GetStyle().FontSizeBase * 0.9f);
+                ImGuiListClipper clip;
+                clip.Begin(int(p.line_starts.size()));
+                int digits = int(std::to_string(p.line_starts.size()).size());
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6);
+                while (clip.Step()) {
+                    for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                        size_t s0 = p.line_starts[size_t(i)];
+                        size_t e = size_t(i) + 1 < p.line_starts.size() ? p.line_starts[size_t(i) + 1] - 1 : p.text.size();
+                        if (e > s0 && p.text[e - 1] == '\n') e--;
+                        ImGui::SetCursorPosX(8);
+                        if (!p.binary) {
+                            ImGui::TextColored(P.faint, "%*d", digits, i + 1);
+                            ImGui::SameLine(0, 10);
+                        }
+                        ImGui::TextUnformatted(p.text.data() + s0, p.text.data() + e);
+                    }
+                }
+                if (g_mono) ImGui::PopFont();
+                ImGui::EndChild();
+                ImGui::PopStyleColor();
+            } else if (p.tex) {
+                image_view(p, body_h);
+            }
+    }
+    // Controls
+    ImGui::Dummy(ImVec2(0, 2));
+    if (icon_button(ICON_FA_XMARK, "Close preview  (Space)", false, true, 26)) {
         preview_free(a);
         return;
     }
     if (p.kind != PreviewKind::Text && p.state == PreviewState::Ready) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Fit")) p.zoom = 0;
-        ImGui::SameLine();
-        if (ImGui::SmallButton("100%")) p.zoom = 1;
-        ImGui::SameLine();
-        ImGui::TextDisabled("%d×%d · Ctrl+wheel to zoom", p.w, p.h);
+        ImGui::SameLine(0, 2);
+        if (icon_button(ICON_FA_EXPAND, "Fit", p.zoom == 0, true, 26)) p.zoom = 0;
+        ImGui::SameLine(0, 2);
+        if (icon_button(ICON_FA_MAGNIFYING_GLASS_PLUS, "Actual size (Ctrl+wheel zooms)", p.zoom == 1, true, 26)) p.zoom = 1;
     }
     if (p.pdf && p.pdf->is_open()) {
-        ImGui::SameLine();
-        ImGui::BeginDisabled(p.page_loading || p.page <= 1);
-        if (ImGui::SmallButton("◀")) render_pdf_page(a, p.page - 1);
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::Text("Page %d / %d", p.page, p.pdf->pages());
-        ImGui::SameLine();
-        ImGui::BeginDisabled(p.page_loading || p.page >= p.pdf->pages());
-        if (ImGui::SmallButton("▶")) render_pdf_page(a, p.page + 1);
-        ImGui::EndDisabled();
-    }
-    switch (p.state) {
-        case PreviewState::Loading:
-            ImGui::TextDisabled("Loading%s…", sel->entry.encrypted ? " and decrypting" : "");
-            return;
-        case PreviewState::Error:
-            ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", p.error.c_str());
-            if (p.too_large) ImGui::TextDisabled("Use Download to save a copy where you choose.");
-            return;
-        default: break;
-    }
-    if (p.kind == PreviewKind::Text) {
-        if (p.binary) ImGui::TextDisabled("Not valid UTF-8 text: showing a hex dump of the first 64 KB.");
-        ImGui::BeginChild("text", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-        ImGuiListClipper clip;
-        clip.Begin(int(p.line_starts.size()));
-        int digits = int(std::to_string(p.line_starts.size()).size());
-        while (clip.Step()) {
-            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
-                size_t s = p.line_starts[size_t(i)];
-                size_t e = size_t(i) + 1 < p.line_starts.size() ? p.line_starts[size_t(i) + 1] - 1 : p.text.size();
-                if (e > s && p.text[e - 1] == '\n') e--;
-                if (!p.binary) {
-                    ImGui::TextDisabled("%*d", digits, i + 1);
-                    ImGui::SameLine();
-                }
-                ImGui::TextUnformatted(p.text.data() + s, p.text.data() + e);
-            }
-        }
-        ImGui::EndChild();
+        ImGui::SameLine(0, 10);
+        if (icon_button(ICON_FA_CHEVRON_LEFT, "Previous page", false, !p.page_loading && p.page > 1, 26)) render_pdf_page(a, p.page - 1);
+        ImGui::SameLine(0, 2);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
+        small_dim("%d / %d", p.page, p.pdf->pages());
+        ImGui::SameLine(0, 2);
+        if (icon_button(ICON_FA_CHEVRON_RIGHT, "Next page", false, !p.page_loading && p.page < p.pdf->pages(), 26)) render_pdf_page(a, p.page + 1);
+    } else if (p.kind == PreviewKind::Text && p.state == PreviewState::Ready) {
+        ImGui::SameLine(0, 8);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
+        small_dim(p.binary ? "Not text — hex dump of the first 64 KB" : "%zu lines", p.line_starts.size());
     } else if (p.tex) {
-        image_view(p);
-        if (p.page_loading) ImGui::TextDisabled("Rendering page…");
+        ImGui::SameLine(0, 8);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
+        small_dim("%d × %d", p.w, p.h);
     }
 }
 

@@ -12,7 +12,7 @@ Sync, browse and encrypt your files on **any S3-compatible storage**: Cloudflare
 
 Linux desktop app (C++17 · Dear ImGui · GLFW · OpenGL 3.3) plus a headless `s3vault-cli`. macOS, Windows, iOS and Android are on the [roadmap](#roadmap).
 
-![Vault browser with an encrypted image previewed in the app](docs/screenshots/01-vault-preview.png)
+![s3vault: sidebar with synced folders, Finder-style file list and the inspector with a Quick Look preview](docs/screenshots/01-files.png)
 
 ## Contents
 
@@ -72,7 +72,7 @@ mindmap
 - **Vault browser.**
   - A folder tree with type icons, sortable by name, type, size, last modified and status. Filter by name or type.
   - A green sync icon marks tracked folders and their files. Hovering shows the local path and direction, and every status explains itself.
-  - Click a selected row again, click empty space, or press Esc to deselect. The **vault root** button resets where new items go.
+  - Finder model: you are always *in* a folder (breadcrumb + back/forward), and new folders and uploads go there. Click a selected row again, click empty space, or press Esc to deselect.
 - **File operations.**
   - Upload with the built-in file browser (multi-select, folders included) or by drag and drop.
   - Uploads show as a **queue with progress** in Transfers, and every result is logged.
@@ -90,19 +90,31 @@ mindmap
   - **Lock**, manually or after N idle minutes, hides the window. The vault key stays loaded, so **sync keeps running**.
   - **Forget vault key** stops encrypted sync.
   - **Export** the password-protected key file, or the raw recovery key.
+- **Mac-style interface.**
+  - A sidebar with All Files, Trash, your synced folders (live status dots), Transfers, Conflicts and Editor (badges).
+  - A toolbar with back/forward, a clickable path, search, upload, new folder and the inspector toggle.
+  - An inspector with Quick Look, information and actions.
+  - Sheets for every dialog, a three-step setup assistant (storage → vault → first folder), and a lock screen.
+  - Light and dark appearance.
+  - Keyboard: Space Quick Look · Enter/F2 rename · Delete move to Trash · Ctrl+E edit · Ctrl+U upload · Ctrl+Shift+N new folder · Ctrl+F search · Ctrl+I inspector · Alt+←/→ back/forward · Backspace enclosing folder.
 - **Robust UI.**
   - Network, crypto and tree building run on worker threads; syncing hundreds of MB keeps every frame under 100 ms.
   - If the GPU driver can't open a window (e.g. an LLM is using all unified memory), s3vault restarts itself with software rendering.
 
 ## Gallery
 
+Dark and light follow your desktop setting (or choose in Settings → Appearance).
+
 | | |
 |---|---|
-| ![Image preview](docs/screenshots/01-vault-preview.png) **Vault tree + image preview.** The tracked folder has a sync icon and statuses. | ![PDF preview](docs/screenshots/02-pdf-preview.png) **PDF preview**, rendered page by page from memory. |
-| ![Editor](docs/screenshots/03-editor.png) **Built-in editor.** The tab dot means unsaved; Ctrl+S saves back with If-Match. | ![Conflicts](docs/screenshots/04-conflicts.png) **Conflicts** grouped by tracked folder → folder → file, with batch actions. |
-| ![Compare](docs/screenshots/05-compare.png) **Compare** this device's version with the server's. | ![Transfers](docs/screenshots/06-transfers.png) **Transfers**: upload queue with progress, plus the activity log. |
-| ![Lock](docs/screenshots/07-lock.png) **Lock screen.** Content is hidden while sync keeps running. | ![Settings](docs/screenshots/08-settings.png) **Settings**: storage, keys & backup, download all. |
-| ![Export key](docs/screenshots/09-export-key.png) **Export key**: backup key file or recovery key. | ![File browser](docs/screenshots/10-file-browser.png) **Built-in file browser** for uploads and tracked folders. |
+| ![Files](docs/screenshots/01-files.png) **Files.** Sidebar with synced folders and status dots, a Finder-style list, and the inspector with Quick Look. | ![Light](docs/screenshots/13-light-files.png) **Light appearance.** A text file previewed in the inspector (monospaced, from memory). |
+| ![PDF](docs/screenshots/02-pdf-preview.png) **PDF Quick Look**, page by page, from memory. | ![Editor](docs/screenshots/03-editor.png) **Built-in editor.** Ctrl+S saves back with If-Match. |
+| ![Conflicts](docs/screenshots/04-conflicts.png) **Conflicts** grouped by folder; one decision for many files. | ![Compare](docs/screenshots/05-compare.png) **Compare** this device's version with the server's. |
+| ![Transfers](docs/screenshots/06-transfers.png) **Transfers.** The upload queue with progress, and the activity log. | ![Trash](docs/screenshots/11-trash.png) **Trash.** Put Back, or Empty Trash. |
+| ![Settings](docs/screenshots/08-settings.png) **Settings.** Cards that save as you change them. | ![Settings light](docs/screenshots/14-light-settings.png) **Settings, light.** |
+| ![Export key](docs/screenshots/09-export-key.png) **Export Key** sheet: backup key file or recovery key. | ![File browser](docs/screenshots/10-file-browser.png) **Built-in file browser** for uploads and synced folders. |
+| ![Setup](docs/screenshots/12-setup.png) **Setup assistant, step 1:** connect your storage. | ![Create vault](docs/screenshots/16-create-vault.png) **Step 2:** create the vault password, with a strength meter. |
+| ![Unlock](docs/screenshots/07-unlock.png) **Unlock** at start, or browse names only without the key. | ![Locked](docs/screenshots/15-locked.png) **Locked window.** Content is hidden while sync keeps running. |
 
 ## How sync works
 

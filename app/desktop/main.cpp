@@ -74,8 +74,16 @@ static std::string script_step(Script& s, ui::App& a) {
             s.i++;
             return "";
         } else if (cmd == "tab") {
-            const char* names[] = {"vault", "folders", "conflicts", "transfers", "edits", "settings"};
-            for (int t = 0; t < 6; t++) if (arg == names[t]) a.want_tab = t;
+            if (arg == "vault" || arg == "files") ui::set_view(a, ui::View::Files);
+            else if (arg == "trash") ui::set_view(a, ui::View::Trash);
+            else if (arg == "conflicts") ui::set_view(a, ui::View::Conflicts);
+            else if (arg == "transfers") ui::set_view(a, ui::View::Transfers);
+            else if (arg == "edits" || arg == "editor") ui::set_view(a, ui::View::Editor);
+            else if (arg == "settings" || arg == "folders") ui::set_view(a, ui::View::Settings);
+        } else if (cmd == "theme") {
+            a.cfg.ui.theme = arg;
+        } else if (cmd == "cd") {
+            ui::navigate(a, arg);
         } else if (cmd == "expand") {
             std::string p;
             for (auto& part : split(arg, '/')) { p = p.empty() ? part : p + "/" + part; a.force_open.insert(p); }
@@ -112,7 +120,7 @@ static std::string script_step(Script& s, ui::App& a) {
         } else if (cmd == "unlock") {
             // Test-only: password from $S3VAULT_PASSWORD, never from the script text.
             if (const char* pw = getenv("S3VAULT_PASSWORD"); pw && a.vault) {
-                OpResult r = a.ui_locked ? a.vault->verify_password(pw) : a.vault->unlock(pw);
+                OpResult r = a.vault->unlocked() ? a.vault->verify_password(pw) : a.vault->unlock(pw);
                 if (r.ok) {
                     a.modal.clear();
                     a.ui_locked = false;
@@ -162,13 +170,16 @@ static std::string icon_font_path() {
 static void build_fonts() {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
-    std::string base;
-    for (const char* p : {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                          "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"})
-        if (stat_path(p, true).is_file) { base = p; break; }
-    if (base.empty()) base = fc_match("sans-serif:lang=en");
     // Text fonts must not answer for the icon range (DejaVu maps legacy fi/fl ligatures at U+F001/F002).
     static const ImWchar no_pua[] = {0xE000, 0xF8FF, 0};
+    auto first = [](std::initializer_list<const char*> paths, const char* pattern) {
+        for (const char* p : paths)
+            if (stat_path(p, true).is_file) return std::string(p);
+        return fc_match(pattern);
+    };
+    std::string base = first({"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+                              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"},
+                             "sans-serif:lang=en");
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     cfg.GlyphExcludeRanges = no_pua;
@@ -187,32 +198,25 @@ static void build_fonts() {
         m.MergeMode = true;
         io.Fonts->AddFontFromFileTTF(icons.c_str(), 0.0f, &m);
     }
-}
-
-static void apply_style() {
-    ImGui::StyleColorsDark();
-    ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowRounding = 0;
-    s.FrameRounding = 4;
-    s.PopupRounding = 6;
-    s.TabRounding = 4;
-    s.GrabRounding = 4;
-    s.FramePadding = ImVec2(8, 5);
-    s.ItemSpacing = ImVec2(8, 6);
-    s.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesToNodes;
-    ImVec4* c = s.Colors;
-    c[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.11f, 0.13f, 1);
-    c[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.11f, 0.13f, 1);
-    c[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.14f, 0.17f, 1);
-    c[ImGuiCol_Header] = ImVec4(0.20f, 0.36f, 0.58f, 0.55f);
-    c[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.42f, 0.66f, 0.70f);
-    c[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.46f, 0.72f, 0.85f);
-    c[ImGuiCol_Button] = ImVec4(0.20f, 0.30f, 0.45f, 0.75f);
-    c[ImGuiCol_ButtonHovered] = ImVec4(0.26f, 0.40f, 0.60f, 1);
-    c[ImGuiCol_Tab] = ImVec4(0.14f, 0.16f, 0.20f, 1);
-    c[ImGuiCol_TabSelected] = ImVec4(0.22f, 0.34f, 0.52f, 1);
-    c[ImGuiCol_TabHovered] = ImVec4(0.26f, 0.40f, 0.60f, 1);
-    c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 1, 1, 0.025f);
+    // Monospaced font for code, text previews and the editor (with the same CJK + icon fallbacks).
+    std::string mono = first({"/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"},
+                             "monospace");
+    if (!mono.empty()) {
+        ImFontConfig mc;
+        mc.GlyphExcludeRanges = no_pua;
+        ui::g_mono = io.Fonts->AddFontFromFileTTF(mono.c_str(), 0.0f, &mc);
+        if (ui::g_mono && !cjk.empty()) {
+            ImFontConfig m;
+            m.MergeMode = true;
+            m.GlyphExcludeRanges = no_pua;
+            io.Fonts->AddFontFromFileTTF(cjk.c_str(), 0.0f, &m);
+        }
+        if (ui::g_mono && !icons.empty()) {
+            ImFontConfig m;
+            m.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF(icons.c_str(), 0.0f, &m);
+        }
+    }
 }
 
 // The NVIDIA GL driver segfaults on the first draw when it cannot allocate a graphics context (e.g. a
@@ -299,7 +303,7 @@ int main(int argc, char** argv) {
     if (!script.steps.empty()) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     glfwWindowHintString(GLFW_X11_CLASS_NAME, "s3vault");
     glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "s3vault");
-    app.win = glfwCreateWindow(std::max(640, app.cfg.ui.width), std::max(420, app.cfg.ui.height), "s3vault", nullptr, nullptr);
+    app.win = glfwCreateWindow(std::max(720, app.cfg.ui.width), std::max(480, app.cfg.ui.height), "s3vault", nullptr, nullptr);
     if (!app.win) return 1;
     glfwMakeContextCurrent(app.win);
     glfwSwapInterval(1);
@@ -322,8 +326,7 @@ int main(int argc, char** argv) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;  // layout is fixed; nothing about files is persisted by ImGui
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    apply_style();
-    build_fonts();
+    build_fonts();  // colours and metrics: ui::apply_theme(), applied by the first frame
     ImGui_ImplGlfw_InitForOpenGL(app.win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
@@ -352,7 +355,7 @@ int main(int argc, char** argv) {
         int w, h;
         glfwGetFramebufferSize(app.win, &w, &h);
         glViewport(0, 0, w, h);
-        glClearColor(0.10f, 0.11f, 0.13f, 1);
+        glClearColor(ui::P.bg.x, ui::P.bg.y, ui::P.bg.z, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         if (!shot.empty()) {

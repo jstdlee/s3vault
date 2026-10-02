@@ -87,7 +87,6 @@ void connect_async(App& a) {
     a.multi.clear();
     if (!storage_configured(a.cfg)) {
         a.conn = App::Conn::Unconfigured;
-        a.want_tab = 5;
         return;
     }
     a.conn = App::Conn::Connecting;
@@ -106,7 +105,7 @@ void connect_async(App& a) {
         std::string err;
         auto still_current = [&a, s] { return a.sess == s; };
         if (!v->connect(err)) {
-            a.post([&a, err, still_current] { if (!still_current()) return; a.conn = App::Conn::Error; a.conn_error = err; a.want_tab = 5; });
+            a.post([&a, err, still_current] { if (!still_current()) return; a.conn = App::Conn::Error; a.conn_error = err; });
             return;
         }
         bool exists = false;
@@ -116,7 +115,7 @@ void connect_async(App& a) {
             return;
         }
         if (!exists) {
-            a.post([&a, still_current] { if (!still_current()) return; a.conn = App::Conn::NoVault; a.modal = "create-vault"; });
+            a.post([&a, still_current] { if (!still_current()) return; a.conn = App::Conn::NoVault; });
             return;
         }
         bool key = v->has_key();
@@ -128,7 +127,7 @@ void connect_async(App& a) {
             a.conn = App::Conn::Ready;
             a.tree_dirty = true;
             a.upload_encrypt = key;
-            if (key && !a.vault->unlocked()) a.modal = "unlock";
+            a.browse_locked = false;  // the lock screen asks for the password when the key isn't loaded
             a.vault->keep_key_for_session();  // locking hides the window but keeps sync running
             a.engine->start();  // returns immediately; watches and syncs run on the engine's threads
         });
@@ -162,8 +161,55 @@ void lock_ui(App& a, const char* why) {
 void forget_key(App& a) {
     if (a.vault) a.vault->lock();
     a.ui_locked = false;
+    a.browse_locked = true;  // stay in the window, with the "locked" banner
     preview_free(a);
-    a.notify("Vault key forgotten: encrypted files will not sync until you unlock");
+    a.tree_dirty = true;
+    a.notify("Key forgotten — encrypted files won't sync until you unlock");
+}
+
+bool key_needed(App& a) { return a.conn == App::Conn::Ready && a.vault_has_key && a.vault && !a.vault->unlocked(); }
+
+void navigate(App& a, const std::string& dir, bool record) {
+    if (record && dir != a.cwd) {
+        a.back.push_back(a.cwd);
+        a.fwd.clear();
+    }
+    if (a.preview.state != PreviewState::Empty) preview_free(a);
+    a.cwd = dir;
+    a.current_dir = dir;
+    a.selected.clear();
+    a.multi.clear();
+    if (a.filter[0]) {
+        a.filter[0] = 0;
+        a.tree_dirty = true;
+    }
+    a.view = View::Files;
+}
+
+void set_view(App& a, View v) {
+    if (v != View::Files && a.preview.state != PreviewState::Empty) preview_free(a);
+    if (v == View::Trash) a.trash_dirty = true;
+    if (v == View::Settings) {
+        a.form.storage = a.cfg.storage;  // start from what is in use
+        a.probe_report.clear();
+    }
+    a.view = v;
+}
+
+void save_settings(App& a) {
+    a.cfg.save(config_path());
+    // Values the running engine reads on every pass apply at once.
+    if (a.sess) {
+        Config& c = a.sess->cfg;
+        c.sync.poll_seconds = a.cfg.sync.poll_seconds;
+        c.sync.concurrency = a.cfg.sync.concurrency;
+        c.sync.trash_days = a.cfg.sync.trash_days;
+        c.sync.bandwidth_kbps = a.cfg.sync.bandwidth_kbps;
+        c.preview = a.cfg.preview;
+        c.security.idle_minutes = a.cfg.security.idle_minutes;
+        if (a.vault && a.vault->connected())
+            a.vault->s3().max_bytes_per_sec = a.cfg.sync.bandwidth_kbps > 0 ? int64_t(a.cfg.sync.bandwidth_kbps) * 1024 : 0;
+    }
 }
 
 void app_shutdown(App& a) {
@@ -361,175 +407,267 @@ const Node* find_node(const Node* n, const std::string& logical) {
 }
 
 // ---------------------------------------------------------------------------
-// lock screen
+// sidebar
 
-void draw_lock_screen(App& a) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin("##locked", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    float w = 420;
-    ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - w) * 0.5f, vp->WorkSize.y * 0.28f));
-    ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
-    ImGui::Text(ICON_FA_LOCK "  s3vault is locked");
-    ImGui::Spacing();
-    ImGui::TextDisabled("%s/%s", a.cfg.storage.bucket.c_str(), a.vault ? a.vault->prefix().c_str() : "");
-    // Sync status stays visible: it shows no file content.
-    size_t nx = a.engine ? a.engine->transfers().size() : 0;
-    if (a.engine && a.engine->syncing()) ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1), ICON_FA_ROTATE "  Syncing in the background%s",
-                                                             nx ? (" · " + std::to_string(nx) + " transfer(s)").c_str() : "");
-    else if (a.engine && a.engine->last_sync())
-        ImGui::TextDisabled(ICON_FA_CIRCLE_CHECK "  Sync keeps running · last %s", format_local_time(a.engine->last_sync()).c_str());
-    if (a.edits && a.edits->any_dirty()) ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), ICON_FA_PEN "  Unsaved editor changes are kept");
-    ImGui::Spacing();
-    ImGui::SetNextItemWidth(w);
-    if (!a.lock_busy && !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
-    bool enter = ImGui::InputTextWithHint("##pw", "Vault password", a.lock_pw, sizeof a.lock_pw,
-                                          ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::BeginDisabled(a.lock_busy || !a.lock_pw[0]);
-    if ((ImGui::Button(ICON_FA_UNLOCK " Unlock", ImVec2(w, 0)) || enter) && a.lock_pw[0] && !a.lock_busy) {
-        std::string pw = a.lock_pw;
-        explicit_bzero(a.lock_pw, sizeof a.lock_pw);
-        a.lock_busy = true;
-        auto v = a.vault;
-        a.run_job([&a, v, pw]() mutable {
-            OpResult r = v ? v->verify_password(pw) : OpResult::fail("not connected");
-            wipe(pw);
-            a.post([&a, r] {
-                a.lock_busy = false;
-                if (r.ok) {
-                    a.ui_locked = false;
-                    a.tree_dirty = true;
-                    a.last_input = glfwGetTime();
-                } else {
-                    a.lock_error = r.error;
-                }
-            });
-        });
+static bool side_item(const char* icon, const ImVec4& icon_col, const char* label, bool selected, const std::string& badge_text = "",
+                      const ImVec4* badge_col = nullptr, const ImVec4* dot = nullptr) {
+    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight() + 4;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::PushID(label);
+    ImGui::PushID(icon);
+    bool click = ImGui::InvisibleButton("##si", ImVec2(w, h));
+    ImGui::PopID();
+    ImGui::PopID();
+    bool hov = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (selected) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.dark ? ImVec4(1, 1, 1, 0.09f) : ImVec4(0, 0, 0, 0.07f)), 7);
+    else if (hov) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.hover), 7);
+    float ty = p.y + (h - ImGui::GetTextLineHeight()) / 2;
+    ImVec2 is = ImGui::CalcTextSize(icon);
+    dl->AddText(ImVec2(p.x + 10 + (18 - is.x) / 2, ty), col(icon_col), icon);
+    float right = p.x + w - 8;
+    if (!badge_text.empty()) {
+        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.8f);
+        ImVec2 bs = ImGui::CalcTextSize(badge_text.c_str());
+        float bh = bs.y + 4, bw = std::max(bh, bs.x + 12);
+        ImVec2 b0(right - bw, p.y + (h - bh) / 2);
+        if (badge_col) dl->AddRectFilled(b0, ImVec2(b0.x + bw, b0.y + bh), col(*badge_col), bh / 2);
+        dl->AddText(ImVec2(b0.x + (bw - bs.x) / 2, b0.y + 2), col(badge_col ? P.on_accent : P.dim), badge_text.c_str());
+        ImGui::PopFont();
+        right -= bw + 6;
     }
-    ImGui::EndDisabled();
-    if (a.lock_busy) ImGui::TextDisabled("Checking…");
-    if (!a.lock_error.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", a.lock_error.c_str());
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::TextDisabled("Sync keeps running while locked. To also stop syncing encrypted files:");
-    if (ImGui::SmallButton("Forget the vault key")) {
-        forget_key(a);
-        a.modal = "unlock";
+    if (dot) {
+        dl->AddCircleFilled(ImVec2(right - 4, p.y + h / 2), 4, col(*dot), 12);
+        right -= 14;
     }
-    ImGui::PopTextWrapPos();
-    ImGui::EndGroup();
-    ImGui::End();
-    draw_modals(a);  // only the unlock dialog can be open here
+    // Label, cut with an ellipsis if needed.
+    std::string l = label;
+    float maxw = right - (p.x + 36);
+    if (ImGui::CalcTextSize(l.c_str()).x > maxw) {
+        while (l.size() > 1 && ImGui::CalcTextSize((l + "…").c_str()).x > maxw) {
+            size_t k = l.size() - 1;
+            while (k > 0 && (static_cast<unsigned char>(l[k]) & 0xC0) == 0x80) k--;
+            l.resize(k);
+        }
+        l += "…";
+        tip(label);
+    }
+    dl->AddText(ImVec2(p.x + 36, ty), col(P.text), l.c_str());
+    return click;
+}
+
+static void side_section(const char* title) {
+    ImGui::Dummy(ImVec2(0, 8));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.78f);
+    ImGui::TextColored(P.dim, "%s", title);
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 1));
+}
+
+static void sidebar(App& a, float w, float h) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, P.sidebar);
+    ImGui::BeginChild("##sidebar", ImVec2(w, h), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleColor();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos();
+    dl->AddLine(ImVec2(wp.x + w - 1, wp.y), ImVec2(wp.x + w - 1, wp.y + h), col(P.border));
+    float footer_h = 92;
+
+    ImGui::SetCursorPos(ImVec2(16, 16));
+    ImGui::TextColored(P.accent, ICON_FA_VAULT);
+    ImGui::SameLine(0, 8);
+    title_text("s3vault", 1.12f);
+    ImGui::SetCursorPosX(16);
+    small_dim("%s", a.cfg.storage.bucket.empty() ? "not connected" : a.cfg.storage.bucket.c_str());
+    ImGui::Dummy(ImVec2(0, 4));
+
+    ImGui::SetCursorPosX(8);
+    ImGui::BeginChild("##sidelist", ImVec2(w - 16, h - ImGui::GetCursorPosY() - footer_h), ImGuiChildFlags_None, ImGuiWindowFlags_None);
+    bool files = a.view == View::Files;
+    side_section("VAULT");
+    if (side_item(ICON_FA_HARD_DRIVE, P.accent, "All Files", files && a.cwd.empty())) navigate(a, "");
+    if (side_item(ICON_FA_TRASH, P.dim, "Trash", a.view == View::Trash)) set_view(a, View::Trash);
+
+    auto roots = a.db.roots();
+    side_section("SYNCED FOLDERS");
+    auto conflicts = a.db.conflicts();
+    for (auto& r : roots) {
+        size_t nconf = 0;
+        for (auto& c : conflicts) nconf += c.root_id == r.id;
+        bool missing = !stat_path(r.local_path, true).is_dir;
+        ImVec4 dotc = r.paused ? P.grey : missing ? P.red : nconf ? P.orange : (a.engine && a.engine->syncing()) ? P.blue : P.green;
+        std::string label = path_basename(r.local_path);
+        bool sel = files && !a.cwd.empty() && (a.cwd == r.remote_prefix || starts_with(a.cwd, r.remote_prefix + "/"));
+        ImGui::PushID(r.id);
+        if (side_item(ICON_FA_FOLDER, P.folder, label.c_str(), sel, "", nullptr, &dotc)) navigate(a, r.remote_prefix);
+        std::string t = display_path(r.local_path) + "  ↔  /" + r.remote_prefix + "\n" +
+                        (r.paused ? "Paused" : missing ? "Folder missing on this computer" : nconf ? std::to_string(nconf) + " conflict(s)" : "In sync");
+        tip(t);
+        if (ImGui::BeginPopupContextItem("##rootmenu")) {
+            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "   Show in Vault")) navigate(a, r.remote_prefix);
+            RootRow rr = r;
+            if (ImGui::MenuItem(r.paused ? ICON_FA_PLAY "   Resume Syncing" : ICON_FA_PAUSE "   Pause Syncing")) {
+                rr.paused = !rr.paused;
+                a.db.update_root(rr);
+                if (a.engine) a.engine->request_sync();
+            }
+            if (ImGui::MenuItem(ICON_FA_GEAR "   Sync Settings…")) set_view(a, View::Settings);
+            ImGui::Separator();
+            if (ImGui::MenuItem(ICON_FA_LINK_SLASH "   Stop Syncing…")) {
+                a.modal_arg = std::to_string(r.id);
+                a.modal = "remove-root";
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
+    if (side_item(ICON_FA_PLUS, P.dim, "Add Folder…", false)) add_tracked_folder(a);
+
+    side_section("ACTIVITY");
+    auto ts = a.engine ? a.engine->transfers() : std::vector<Transfer>{};
+    if (side_item(ICON_FA_ARROW_RIGHT_ARROW_LEFT, P.dim, "Transfers", a.view == View::Transfers, ts.empty() ? "" : std::to_string(ts.size()), &P.accent))
+        set_view(a, View::Transfers);
+    if (side_item(ICON_FA_CODE_MERGE, conflicts.empty() ? P.dim : P.orange, "Conflicts", a.view == View::Conflicts,
+                  conflicts.empty() ? "" : std::to_string(conflicts.size()), &P.orange))
+        set_view(a, View::Conflicts);
+    size_t ndocs = a.edits ? a.edits->ids().size() : 0;
+    bool dirty = a.edits && a.edits->any_dirty();
+    if (ndocs && side_item(ICON_FA_PEN_TO_SQUARE, P.dim, "Editor", a.view == View::Editor, std::to_string(ndocs), dirty ? &P.orange : &P.grey))
+        set_view(a, View::Editor);
+    ImGui::EndChild();
+
+    // Footer: sync status, lock, settings
+    ImGui::SetCursorPos(ImVec2(0, h - footer_h));
+    ImVec2 fp = ImGui::GetCursorScreenPos();
+    dl->AddLine(fp, ImVec2(fp.x + w - 1, fp.y), col(P.border));
+    ImGui::SetCursorPos(ImVec2(16, h - footer_h + 12));
+    {
+        using C = App::Conn;
+        std::string line1, line2;
+        ImVec4 c = P.dim;
+        const char* icon = ICON_FA_CIRCLE_CHECK;
+        size_t nx = ts.size();
+        if (a.conn == C::Connecting) { line1 = "Connecting…"; icon = ICON_FA_CLOUD; }
+        else if (a.conn == C::Error) { line1 = "Can't reach storage"; line2 = "Open Settings for details"; c = P.red; icon = ICON_FA_CIRCLE_EXCLAMATION; }
+        else if (a.conn != C::Ready) { line1 = "Not connected"; icon = ICON_FA_CLOUD; }
+        else if (key_needed(a)) { line1 = "Locked"; line2 = "Encrypted files are paused"; c = P.orange; icon = ICON_FA_LOCK; }
+        else if (nx || (a.engine && a.engine->syncing())) { line1 = nx ? "Syncing " + std::to_string(nx) + " files" : "Checking for changes"; c = P.accent; icon = ICON_FA_ROTATE; }
+        else if (!conflicts.empty()) { line1 = "Needs your attention"; line2 = std::to_string(conflicts.size()) + " conflict(s)"; c = P.orange; icon = ICON_FA_TRIANGLE_EXCLAMATION; }
+        else { line1 = "Up to date"; c = P.green; }
+        if (line2.empty() && a.engine && a.engine->last_sync()) line2 = "Checked " + format_local_time(a.engine->last_sync()).substr(11);
+        ImGui::TextColored(c, "%s", icon);
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(line1.c_str());
+        if (!line2.empty()) small_dim("%s", line2.c_str());
+        ImGui::EndGroup();
+    }
+    ImGui::SetCursorPos(ImVec2(10, h - 40));
+    bool can_lock = a.vault && a.vault_has_key && a.vault->unlocked();
+    if (icon_button(ICON_FA_LOCK, can_lock ? "Lock the window — sync keeps running" : "Nothing to lock", false, can_lock)) lock_ui(a, nullptr);
+    ImGui::SameLine(0, 2);
+    if (icon_button(ICON_FA_ARROWS_ROTATE, "Sync now", a.engine && a.engine->syncing(), a.conn == App::Conn::Ready)) {
+        if (a.engine) a.engine->request_sync();
+        refresh_listing(a);
+    }
+    ImGui::SameLine(0, 2);
+    if (icon_button(ICON_FA_GEAR, "Settings", a.view == View::Settings)) set_view(a, View::Settings);
+    ImGui::EndChild();
 }
 
 // ---------------------------------------------------------------------------
 // frame
 
-static void toolbar(App& a) {
+static void toast(App& a) {
+    if (a.toast.text.empty() || glfwGetTime() > a.toast.until) return;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    float alpha = std::min(1.0f, float(a.toast.until - glfwGetTime()) * 3.0f);
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x / 2 + a.sidebar_w / 2, vp->WorkPos.y + vp->WorkSize.y - 24), 0, ImVec2(0.5f, 1));
+    ImGui::SetNextWindowBgAlpha(0.96f * alpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 10));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 20);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, P.dark ? ImVec4(0.2f, 0.2f, 0.22f, 1) : ImVec4(1, 1, 1, 1));
+    ImGui::Begin("##toast", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings);
+    if (a.toast.error) ImGui::TextColored(P.red, ICON_FA_CIRCLE_EXCLAMATION);
+    else ImGui::TextColored(P.green, ICON_FA_CIRCLE_CHECK);
+    ImGui::SameLine(0, 8);
+    ImGui::PushTextWrapPos(560);
+    ImGui::TextUnformatted(a.toast.text.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(4);
+}
+
+static bool setup_needed(App& a) {
     using C = App::Conn;
-    C c = a.conn;
-    ImGui::AlignTextToFramePadding();
-    const std::string& bucket = a.cfg.storage.bucket;
-    switch (c) {
-        case C::Unconfigured: ImGui::TextColored({0.9f, 0.7f, 0.2f, 1}, ICON_FA_GEAR "  Storage not configured"); break;
-        case C::Connecting: ImGui::TextDisabled(ICON_FA_CLOUD "  Connecting to %s…", bucket.c_str()); break;
-        case C::Error: ImGui::TextColored({0.95f, 0.35f, 0.3f, 1}, ICON_FA_TRIANGLE_EXCLAMATION "  %s", a.conn_error.c_str()); break;
-        case C::NoVault: ImGui::TextColored({0.9f, 0.7f, 0.2f, 1}, ICON_FA_CLOUD "  No vault at %s/%s", bucket.c_str(), a.cfg.storage.prefix.c_str()); break;
-        case C::Ready: ImGui::Text(ICON_FA_CLOUD "  %s/%s", bucket.c_str(), a.vault->prefix().c_str()); break;
-    }
-    if (c == C::Ready) {
-        ImGui::SameLine();
-        if (a.vault_has_key) {
-            if (a.vault->unlocked()) {
-                if (ImGui::Button(ICON_FA_LOCK " Lock")) lock_ui(a, nullptr);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide the vault until the password is entered again.\nSync keeps running in the background.");
-            } else if (ImGui::Button(ICON_FA_LOCK " Unlock")) {
-                a.modal = "unlock";
-            }
-        } else if (ImGui::Button(ICON_FA_KEY " Set password")) {
-            a.modal = "set-password";
-        }
-        ImGui::SameLine();
-        bool syncing = a.engine && a.engine->syncing();
-        ImGui::BeginDisabled(syncing);
-        if (ImGui::Button(syncing ? ICON_FA_ROTATE " Syncing…" : ICON_FA_ARROWS_ROTATE " Sync now")) a.engine->request_sync();
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (a.engine && a.engine->last_sync())
-            ImGui::TextDisabled("Last sync %s · %s", format_local_time(a.engine->last_sync()).c_str(), a.engine->last_summary().c_str());
-    } else if (c == C::Error || c == C::NoVault) {
-        ImGui::SameLine();
-        if (ImGui::Button("Retry")) connect_async(a);
-    }
+    if (a.conn == C::Unconfigured || a.conn == C::NoVault) return true;
+    if (a.offer_first_folder && a.conn == C::Ready) return true;
+    // A connection error before anything was ever set up keeps the assistant on screen.
+    if ((a.conn == C::Error || a.conn == C::Connecting) && a.listed_at == 0 && a.db.roots().empty() && a.view != View::Settings) return true;
+    return false;
 }
 
 void app_frame(App& a) {
     a.drain_ui_queue();
     if (a.tree_dirty && a.conn == App::Conn::Ready) rebuild_tree(a);
 
-    // Idle → lock the window (not the key: sync continues). Only in "idle" mode.
-    if (a.vault && a.vault->unlocked() && !a.ui_locked && a.cfg.security.remember == "idle" &&
-        a.cfg.security.idle_minutes > 0 && glfwGetTime() - a.last_input > a.cfg.security.idle_minutes * 60.0)
-        lock_ui(a, "Locked after inactivity; sync continues");
-    preview_tick(a);
-
-    if (a.ui_locked) {
-        draw_lock_screen(a);
-        return;
+    // Theme: follow the setting (system = the desktop's light/dark preference, read at start).
+    static int applied = -1;
+    static bool sys_dark = system_prefers_dark();
+    int want = a.cfg.ui.theme == "dark" ? 1 : a.cfg.ui.theme == "light" ? 0 : (sys_dark ? 1 : 0);
+    if (want != applied) {
+        apply_theme(want == 1);
+        applied = want;
     }
+
+    // Lock the window after inactivity (the key stays loaded; sync continues).
+    if (a.vault && a.vault->unlocked() && !a.ui_locked && a.cfg.security.idle_minutes > 0 && a.cfg.security.remember != "ask" &&
+        glfwGetTime() - a.last_input > a.cfg.security.idle_minutes * 60.0)
+        lock_ui(a, nullptr);
+    preview_tick(a);
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::Begin("##main", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
-    toolbar(a);
-    ImGui::Separator();
+                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    float W = vp->WorkSize.x, H = vp->WorkSize.y;
 
-    size_t nconf = a.db.conflicts().size();
-    size_t nedit = a.edits ? a.edits->ids().size() : 0;
-    size_t nxfer = a.engine ? a.engine->transfers().size() : 0;
-    if (ImGui::BeginTabBar("tabs")) {
-        auto tab = [&](int id, const std::string& label) {
-            ImGuiTabItemFlags f = a.want_tab == id ? ImGuiTabItemFlags_SetSelected : 0;
-            bool open = ImGui::BeginTabItem(label.c_str(), nullptr, f);
-            if (open) a.tab = id;
-            return open;
-        };
-        if (tab(0, ICON_FA_FOLDER_OPEN " Vault###vault")) { draw_vault_tab(a); ImGui::EndTabItem(); }
-        if (tab(1, ICON_FA_HARD_DRIVE " Tracked folders###folders")) { draw_folders_tab(a); ImGui::EndTabItem(); }
-        std::string cl = std::string(ICON_FA_TRIANGLE_EXCLAMATION " Conflicts") + (nconf ? " (" + std::to_string(nconf) + ")" : "") + "###conflicts";
-        if (nconf) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1));
-        bool ct = tab(2, cl);
-        if (nconf) ImGui::PopStyleColor();
-        if (ct) { draw_conflicts_tab(a); ImGui::EndTabItem(); }
-        std::string tl = std::string(ICON_FA_CLOUD_ARROW_UP " Transfers") + (nxfer ? " (" + std::to_string(nxfer) + ")" : "") + "###transfers";
-        if (tab(3, tl)) { draw_transfers_tab(a); ImGui::EndTabItem(); }
-        std::string el = std::string(ICON_FA_PEN_TO_SQUARE " Editor") + (nedit ? " (" + std::to_string(nedit) + ")" : "") + "###edits";
-        if (tab(4, el)) { draw_edits_tab(a); ImGui::EndTabItem(); }
-        if (tab(5, ICON_FA_GEAR " Settings###settings")) { draw_settings_tab(a); ImGui::EndTabItem(); }
-        ImGui::EndTabBar();
+    bool locked_screen = a.ui_locked || (key_needed(a) && !a.browse_locked);
+    if (locked_screen) {
+        draw_lock_screen(a);
+    } else if (setup_needed(a)) {
+        draw_setup(a);
+    } else {
+        float sw = W < 760 ? 0 : a.sidebar_w;
+        if (sw > 0) {
+            ImGui::SetCursorPos(ImVec2(0, 0));
+            sidebar(a, sw, H);
+        }
+        ImGui::SetCursorPos(ImVec2(sw, 0));
+        ImGui::BeginChild("##content", ImVec2(W - sw, H), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        switch (a.view) {
+            case View::Files: draw_files_view(a); break;
+            case View::Trash: draw_trash_view(a); break;
+            case View::Transfers: draw_transfers_view(a); break;
+            case View::Conflicts: draw_conflicts_view(a); break;
+            case View::Editor: draw_edits_tab(a); break;
+            case View::Settings: draw_settings_view(a); break;
+        }
+        ImGui::EndChild();
     }
-    a.want_tab = -1;
     ImGui::End();
 
     draw_modals(a);
     draw_file_browser(a);
-
-    // Toast
-    if (!a.toast.text.empty() && glfwGetTime() < a.toast.until) {
-        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12, vp->WorkPos.y + vp->WorkSize.y - 12), 0, ImVec2(1, 1));
-        ImGui::SetNextWindowBgAlpha(0.92f);
-        ImGui::Begin("##toast", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing |
-                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs);
-        if (a.toast.error) ImGui::TextColored({1, 0.45f, 0.4f, 1}, ICON_FA_TRIANGLE_EXCLAMATION " %s", a.toast.text.c_str());
-        else ImGui::Text(ICON_FA_CIRCLE_CHECK " %s", a.toast.text.c_str());
-        ImGui::End();
-    }
+    toast(a);
 }
 
 }  // namespace s3v::ui

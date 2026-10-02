@@ -127,7 +127,12 @@ void draw_file_browser(App& a) {
     ImGui::SetNextWindowSize(ImVec2(std::min(900.0f, vp->WorkSize.x - 40), std::min(560.0f, vp->WorkSize.y - 40)), ImGuiCond_Appearing);
     std::string title = b.title + id;
     bool open = true;
-    if (!ImGui::BeginPopupModal(title.c_str(), &open)) return;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 14));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, P.card);
+    bool shown = ImGui::BeginPopupModal(title.c_str(), &open);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    if (!shown) return;
     if (!open) {
         b.on_ok = nullptr;
         ImGui::EndPopup();
@@ -135,10 +140,9 @@ void draw_file_browser(App& a) {
     }
 
     // Toolbar: up, home, editable path, hidden files.
-    if (ImGui::Button(ICON_FA_ARROW_UP)) go(b, path_dirname(b.cwd).empty() ? "/" : path_dirname(b.cwd));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Parent folder (Backspace)");
+    if (icon_button(ICON_FA_ARROW_UP, "Enclosing folder  (Backspace)", false, true, ImGui::GetFrameHeight())) go(b, path_dirname(b.cwd).empty() ? "/" : path_dirname(b.cwd));
     ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_HOUSE)) go(b, home_dir());
+    if (icon_button(ICON_FA_HOUSE, "Home", false, true, ImGui::GetFrameHeight())) go(b, home_dir());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-160);
     if (ImGui::InputText("##path", b.path_buf, sizeof b.path_buf, ImGuiInputTextFlags_EnterReturnsTrue)) {
@@ -157,10 +161,14 @@ void draw_file_browser(App& a) {
 
     float footer = ImGui::GetFrameHeightWithSpacing() * (b.mode == BrowseMode::Save ? 2.3f : 1.3f) + (b.error.empty() ? 0 : ImGui::GetTextLineHeightWithSpacing());
     // Places
-    ImGui::BeginChild("places", ImVec2(170, -footer), ImGuiChildFlags_Borders);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, P.sidebar);
+    ImGui::BeginChild("places", ImVec2(170, -footer), ImGuiChildFlags_None);
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 4));
     auto place = [&](const char* icon, const std::string& label, const std::string& path) {
         if (!stat_path(path, true).is_dir) return;
-        if (ImGui::Selectable((std::string(icon) + "  " + label + "##" + path).c_str(), b.cwd == path)) go(b, path);
+        ImGui::SetCursorPosX(6);
+        if (ImGui::Selectable((std::string(icon) + "   " + label + "##" + path).c_str(), b.cwd == path, 0, ImVec2(158, ImGui::GetFrameHeight()))) go(b, path);
     };
     std::string h = home_dir();
     place(ICON_FA_HOUSE, "Home", h);
@@ -275,10 +283,10 @@ void draw_file_browser(App& a) {
     }
     ImGui::SameLine(ImGui::GetContentRegionMax().x - 330);
     ImGui::BeginDisabled(result.empty());
-    bool ok = ImGui::Button(ok_label.c_str(), ImVec2(210, 0)) || (enter && !result.empty());
+    bool ok = button(ok_label.c_str(), Btn::Primary, ImVec2(210, 0), !result.empty()) || (enter && !result.empty());
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if (button("Cancel", Btn::Secondary, ImVec2(100, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         b.on_ok = nullptr;
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
