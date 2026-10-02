@@ -117,7 +117,7 @@ mindmap
 
 ## Gallery
 
-Dark and light follow your desktop setting (or choose in Settings → Appearance).
+Every screen below is the current build. Dark and light follow your desktop setting; Tokyo Night and the language are in Settings › Appearance.
 
 | | |
 |---|---|
@@ -127,7 +127,7 @@ Dark and light follow your desktop setting (or choose in Settings → Appearance
 | ![Files](docs/screenshots/01-files.png) **Files.** Sidebar with synced folders and status dots, a Finder-style list, and the inspector with Quick Look. | ![Light](docs/screenshots/13-light-files.png) **Light appearance.** A text file previewed in the inspector (monospaced, from memory). |
 | ![PDF](docs/screenshots/02-pdf-preview.png) **PDF Quick Look**, page by page, from memory. | ![Editor](docs/screenshots/03-editor.png) **Built-in editor.** Ctrl+S saves back with If-Match. |
 | ![Conflicts](docs/screenshots/04-conflicts.png) **Conflicts** grouped by folder; one decision for many files. | ![Compare](docs/screenshots/05-compare.png) **Compare** this device's version with the server's. |
-| ![Transfers](docs/screenshots/06-transfers.png) **Transfers.** The upload queue with progress, and the activity log. | ![Trash](docs/screenshots/11-trash.png) **Trash.** Put Back, or Empty Trash. |
+| ![Transfers](docs/screenshots/06-transfers.png) **Transfers.** The upload queue with progress and the activity log; the tasks button at the top right shows the overall progress ring. | ![Trash](docs/screenshots/11-trash.png) **Trash.** Put Back, or Empty Trash. |
 | ![Settings](docs/screenshots/08-settings.png) **Settings.** Cards that save as you change them. | ![Settings light](docs/screenshots/14-light-settings.png) **Settings, light.** |
 | ![Export key](docs/screenshots/09-export-key.png) **Export Key** sheet: backup key file or recovery key. | ![File browser](docs/screenshots/10-file-browser.png) **Built-in file browser** for uploads and synced folders. |
 | ![Setup](docs/screenshots/12-setup.png) **Setup assistant, step 1:** connect your storage. | ![Create vault](docs/screenshots/16-create-vault.png) **Step 2:** create the vault password, with a strength meter. |

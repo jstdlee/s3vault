@@ -234,10 +234,10 @@ void draw_trash_view(App& a) {
     std::string sub = a.trash.empty() ? "" : tr_n(a.trash.size(), "%zu item", "%zu items") + " · " + trf("kept %d days", a.cfg.sync.trash_days);
     float top = page_header("Trash", sub.c_str());
     float W = ImGui::GetWindowWidth();
-    ImGui::SetCursorPos(ImVec2(W - 20 - 130, (52 - ImGui::GetFrameHeight()) / 2));
+    ImGui::SetCursorPos(ImVec2(W - 20 - 130 - a.chrome_right, (52 - ImGui::GetFrameHeight()) / 2));
     if (button("Empty Trash…", Btn::Destructive, ImVec2(130, 0), !a.trash.empty())) a.modal = "empty-trash";
     if (!a.trash_sel.empty()) {
-        ImGui::SetCursorPos(ImVec2(W - 20 - 130 - 8 - 120, (52 - ImGui::GetFrameHeight()) / 2));
+        ImGui::SetCursorPos(ImVec2(W - 20 - 130 - 8 - 120 - a.chrome_right, (52 - ImGui::GetFrameHeight()) / 2));
         if (button("Put Back", Btn::Primary, ImVec2(120, 0))) {
             std::vector<TrashEntry> todo;
             for (auto& t : a.trash)
