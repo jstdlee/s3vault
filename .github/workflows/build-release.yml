@@ -52,7 +52,7 @@ jobs:
       - name: Package
         id: pkg
         run: |
-          ver="$(git describe --tags --always)"
+          ver="$(git describe --tags --match 'v*' --always)"
           name="s3vault-${ver}-linux-${{ matrix.arch }}"
           cmake --install build --prefix "stage/$name"
           cp README.md LICENSE "stage/$name/"
@@ -103,7 +103,7 @@ jobs:
       - name: Package
         id: pkg
         run: |
-          ver="$(git describe --tags --always)"
+          ver="$(git describe --tags --match 'v*' --always)"
           name="s3vault-${ver}-windows-x86_64"
           cmake --install build --prefix "stage/$name"
           # libcurl and the DLLs it needs from MSYS2 (the executables themselves are statically linked).
