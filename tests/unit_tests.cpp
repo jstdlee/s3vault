@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 #include "config/config.h"
@@ -261,6 +262,8 @@ static void test_planner() {
     }
 }
 
+static std::string g_self;  // path of this test binary
+
 // Scratch directory for file tests (TEMP on Windows).
 static std::string scratch(const std::string& name) {
 #ifdef _WIN32
@@ -379,16 +382,14 @@ static void test_portability() {
     tmv = {};
     CHECK(strptime("20240102T030405Z", "%Y%m%dT%H%M%SZ", &tmv) != nullptr && timegm(&tmv) == 1704164645);
 
-    // Child process I/O: stdin → stdout round trip with binary data.
-    std::string out;
-#ifdef _WIN32
-    std::vector<std::string> cat = {"findstr", "^"};  // echoes stdin lines
-    CHECK(run_capture(cat, "hello\r\n", &out, nullptr, 1 << 20, 10000) == 0 && out.find("hello") != std::string::npos);
-    CHECK(run_capture({"cmd", "/c", "exit 3"}, "", nullptr, nullptr, 1 << 10, 10000) == 3);
-#else
-    CHECK(run_capture({"cat"}, std::string("a\0b\r\n", 5), &out, nullptr, 1 << 20, 10000) == 0 && out == std::string("a\0b\r\n", 5));
-    CHECK(run_capture({"sh", "-c", "exit 3"}, "", nullptr, nullptr, 1 << 10, 10000) == 3);
-#endif
+    // Child process I/O (this test binary re-run as the child): binary-safe stdin → stdout and exit codes.
+    std::string out, bin = std::string("a\0b\r\n\x1a\xff", 7);
+    CHECK(run_capture({g_self, "--child-cat"}, bin, &out, nullptr, 1 << 20, 10000) == 0 && out == bin);
+    CHECK(run_capture({g_self, "--child-exit", "3"}, "", nullptr, nullptr, 1 << 10, 10000) == 3);
+    std::string err;
+    CHECK(run_capture({g_self, "--child-args", "two words", "q\"uote", "back\\slash\\"}, "", &out, &err, 1 << 10, 10000) == 0 &&
+          out == "two words|q\"uote|back\\slash\\|");
+    CHECK(run_capture({g_self, "--child-exit", "0"}, "", nullptr, nullptr, 1 << 10, 5000) == 0);
     CHECK(run_capture({"no-such-program-s3v"}, "", nullptr, nullptr, 1 << 10, 1000) < 0);
 
     // Keychain round trip (where a keychain exists).
@@ -402,7 +403,24 @@ static void test_portability() {
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    // Child modes used by test_portability().
+    if (argc >= 2 && !strcmp(argv[1], "--child-cat")) {
+#ifdef _WIN32
+        _setmode(0, _O_BINARY);
+        _setmode(1, _O_BINARY);
+#endif
+        std::string in;
+        read_all_fd(0, in);
+        write_all_fd(1, in.data(), in.size());
+        return 0;
+    }
+    if (argc >= 3 && !strcmp(argv[1], "--child-exit")) return atoi(argv[2]);
+    if (argc >= 2 && !strcmp(argv[1], "--child-args")) {
+        for (int i = 2; i < argc; i++) printf("%s|", argv[i]);
+        return 0;
+    }
+    g_self = argv[0];
     test_hashes();
     test_sigv4();
     test_strings();
