@@ -10,7 +10,7 @@ Sync, browse and encrypt your files on **any S3-compatible storage**: Cloudflare
 - **Built-in viewing and editing:** everything happens inside the app, so decrypted content is never written to disk and never handed to another program.
 - **Conflicts:** they are never resolved silently. You review them grouped by folder and apply one decision to many files at once.
 
-Linux desktop app (C++17 · Dear ImGui · GLFW · OpenGL 3.3) plus a headless `s3vault-cli`. macOS, Windows, iOS and Android are on the [roadmap](#roadmap).
+Desktop app for Linux and Windows (C++17 · Dear ImGui · GLFW · OpenGL 3.3) plus a headless `s3vault-cli`. macOS, iOS and Android are on the [roadmap](#roadmap).
 
 ![s3vault: sidebar with synced folders, Finder-style file list and the inspector with a Quick Look preview](docs/screenshots/01-files.png)
 
@@ -115,6 +115,7 @@ Dark and light follow your desktop setting (or choose in Settings → Appearance
 | ![Export key](docs/screenshots/09-export-key.png) **Export Key** sheet: backup key file or recovery key. | ![File browser](docs/screenshots/10-file-browser.png) **Built-in file browser** for uploads and synced folders. |
 | ![Setup](docs/screenshots/12-setup.png) **Setup assistant, step 1:** connect your storage. | ![Create vault](docs/screenshots/16-create-vault.png) **Step 2:** create the vault password, with a strength meter. |
 | ![Unlock](docs/screenshots/07-unlock.png) **Unlock** at start, or browse names only without the key. | ![Locked](docs/screenshots/15-locked.png) **Locked window.** Content is hidden while sync keeps running. |
+| ![Windows](docs/screenshots/17-windows-setup.png) **Windows.** The same app on Windows (captured by CI on a Windows runner). | |
 
 ## How sync works
 
@@ -268,14 +269,32 @@ Exporting the recovery key asks for the password again, and the file is written 
 
 ## Download
 
-Prebuilt Linux binaries (x86_64 and arm64) are on the [Releases](https://github.com/jstdlee/s3vault/releases) page:
-- **Versioned releases** come from `v*` tags.
-- **Nightly** is rebuilt on every push to `main` by the [build and release](.github/workflows/build-release.yml) workflow, which compiles, runs the unit tests, packages and publishes.
+Prebuilt binaries are on the [Releases](https://github.com/jstdlee/s3vault/releases) page:
 
+| File | System |
+|---|---|
+| `s3vault-*-linux-x86_64.tar.gz` | Linux, Intel/AMD 64-bit |
+| `s3vault-*-linux-arm64.tar.gz` | Linux, ARM 64-bit |
+| `s3vault-*-windows-x86_64.zip` | Windows 10/11, 64-bit |
+
+- **Versioned releases** come from `v*` tags.
+- **Nightly** is rebuilt on every push to `main`. The [build and release](.github/workflows/build-release.yml) workflow
+  compiles on all three systems, runs the unit tests on each (on Windows: native gpg, Credential Manager and a
+  GUI frame), packages and publishes.
+
+**Linux**
 ```bash
 tar xzf s3vault-*-linux-$(uname -m | sed 's/aarch64/arm64/').tar.gz
 cd s3vault-*/ && ./bin/s3vault          # GUI;  ./bin/s3vault-cli --help
 ```
+
+**Windows**
+- Unzip and run `s3vault.exe` (or `s3vault-cli.exe`). Keep the DLLs next to them; they are libcurl and its TLS libraries.
+- Install [Gpg4win](https://gpg4win.org) for encryption. The gpg bundled with Git for Windows does not work: it cannot
+  receive the passphrase on a Windows pipe handle.
+- Settings live in `%APPDATA%\s3vault`, the index in `%LOCALAPPDATA%\s3vault`, and remembered secrets in the Windows
+  Credential Manager.
+- The build is not code-signed yet, so SmartScreen may warn on first start: choose *More info → Run anyway*.
 
 ## Build
 
@@ -297,6 +316,14 @@ Install to `~/.local`:
 ```bash
 cmake --install build --prefix ~/.local
 ```
+
+**Windows build:** with [MSYS2](https://www.msys2.org) (UCRT64 shell), the same as CI:
+```bash
+pacman -S git python mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,curl,gnupg}
+scripts/fetch-deps.sh && cmake -S . -B build -G Ninja && cmake --build build
+```
+Or cross-compile from Linux with MinGW-w64 (`g++-mingw-w64-x86-64-posix`):
+`cmake -S . -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake`.
 
 ## Set up (Cloudflare R2 example)
 
@@ -339,7 +366,8 @@ s3vault-cli --help
 
 ```bash
 build/s3vault-tests            # unit tests: SHA-256/HMAC, SigV4 reference vector, planner decision table,
-                               # ignore rules, password strength, gpg round trip / wrong key / tamper / planted packet
+                               # ignore rules, password strength, gpg round trip / wrong key / tamper / planted packet,
+                               # portability (atomic replace, binary pipes, UTF-8 names, argv quoting, keychain)
 tests/r2_integration.sh        # end to end against a real bucket, two simulated devices (see its header for test.env)
 ```
 
@@ -365,7 +393,7 @@ s3vault --software --script "sleep:3;unlock;idle;expand:Docs;select:Docs/a.png;p
 ```
 core/        portable engine, no UI: util, config, store (S3/SigV4), crypto (gpg), secret, index (SQLite),
              vault, sync (planner + engine), preview, edit (in-memory documents)
-platform/    iface/platform.h + one backend per OS (linux implemented; macos, windows, ios, android reserved)
+platform/    iface/platform.h + one backend per OS (linux and windows implemented; macos, ios, android reserved)
 app/ui       ImGui panels shared by desktop builds;  app/desktop  GLFW main;  app/mobile  reserved (Flutter)
 cli/         s3vault-cli
 tests/       unit tests, R2 integration script, test helper
@@ -380,12 +408,12 @@ timeline
     Linux (done) : sync engine, CLI, ImGui desktop
                  : gpg encryption, built-in viewer and editor
                  : conflict review, lock with background sync
+    Windows (done) : same ImGui UI, one zip
+                   : ReadDirectoryChangesW, Credential Manager
+                   : Gpg4win, CreateProcess passphrase pipe
     macOS : same ImGui UI (GLFW + GL 4.1)
           : FSEvents watcher, Keychain
           : gpg from GPGTools or Homebrew
-    Windows : same ImGui UI
-            : ReadDirectoryChangesW, Credential Manager
-            : Gpg4win, CreateProcess passphrase pipe
     Android : Flutter UI over the C++ core (dart ffi, NDK)
             : RNP instead of the gpg CLI, same file format
             : Keystore, Storage Access Framework, WorkManager
@@ -398,7 +426,7 @@ timeline
 |---|---|---|---|---|---|
 | Linux | ✅ done | ImGui + GLFW/GL3 | inotify + polling | libsecret | gpg CLI |
 | macOS | planned | same ImGui code | FSEvents | Keychain | gpg (GPGTools/Homebrew) |
-| Windows | planned | same ImGui code | ReadDirectoryChangesW | Credential Manager | Gpg4win |
+| Windows | ✅ done | same ImGui code | ReadDirectoryChangesW | Credential Manager | gpg CLI (Gpg4win) |
 | Android | planned | Flutter over the C++ core (`dart:ffi`) | WorkManager, SAF folders | Android Keystore | RNP (OpenPGP library) |
 | iOS | planned | Flutter over the C++ core | BGTaskScheduler, File Provider | Keychain | RNP |
 

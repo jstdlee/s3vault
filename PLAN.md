@@ -1,10 +1,14 @@
 # s3vault — plan (v3)
 
-## Status (2026-09-29)
+## Status (2026-10-02)
 
 Phases 1 and 2 are done for Linux: the core engine, `s3vault-cli` and the ImGui desktop app. They are tested against a
-real Cloudflare R2 bucket: 85 unit checks, plus a 43-check two-device integration script
+real Cloudflare R2 bucket: 112 unit checks, plus a 40-check two-device integration script
 (`tests/r2_integration.sh`). See README.md for usage.
+
+The Windows half of phase 4 is done (`platform/windows`, `core/util/subprocess_win.cpp`). It builds with MinGW-w64
+(MSYS2 UCRT64 in CI); the unit tests run on a Windows runner with native gpg and the Credential Manager, and CI renders
+one GUI frame there. The two-device R2 integration script has not been run on Windows yet. macOS is still to do.
 
 Where the implementation differs from the text below:
 - There is no zxcvbn. A built-in estimator checks length, character classes, repeats, common words and keyboard/alphabet
