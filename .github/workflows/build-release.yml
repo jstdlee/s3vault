@@ -41,6 +41,11 @@ jobs:
       - name: Fetch pinned third-party sources
         run: scripts/fetch-deps.sh
 
+      - name: Check translations (printf conversions match, table up to date)
+        run: |
+          python3 app/ui/i18n/gen.py
+          git diff --exit-code app/ui/i18n_table.inc
+
       - name: Build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local

@@ -34,7 +34,7 @@ void settings_connect(App& a) {
     if (a.secret_buf[0]) {
         bool ok = platform::keychain_store(Vault::secret_account(a.form.storage), trim(a.secret_buf));
         secure_zero(a.secret_buf, sizeof a.secret_buf);
-        if (!ok) a.notify("The keychain is not available; set S3VAULT_SECRET_KEY in the environment instead", true);
+        if (!ok) a.notify(tr("The keychain is not available; set S3VAULT_SECRET_KEY in the environment instead"), true);
     }
     a.cfg.storage = a.form.storage;
     save_settings(a);
@@ -103,7 +103,7 @@ void draw_settings_view(App& a) {
     if (a.probing || !a.probe_report.empty()) {
         ImGui::Dummy(ImVec2(0, 4));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 30);
-        if (a.probing) { spinner(7, P.dim); ImGui::SameLine(); ImGui::TextDisabled("Testing the bucket…"); }
+        if (a.probing) { spinner(7, P.dim); ImGui::SameLine(); ImGui::TextDisabled("%s", tr("Testing the bucket…")); }
         else {
             ImGui::BeginGroup();
             for (auto& l : split(a.probe_report, '\n'))
@@ -234,10 +234,21 @@ void draw_settings_view(App& a) {
     prefs::section("Appearance");
     prefs::card_begin();
     {
-        std::vector<std::string> v = {"system", "light", "dark"};
+        std::vector<std::string> v = {"system", "light", "dark", "tokyo"};
         int i = index_of(v, a.cfg.ui.theme);
-        if (prefs::choice("Appearance", "Follows your desktop's light or dark setting by default", &i, {"System", "Light", "Dark"})) {
+        if (prefs::choice("Appearance", "Follows your desktop's light or dark setting by default; Ctrl+Shift+T switches",
+                          &i, {"System", "Light", "Dark", "Tokyo Night"})) {
             a.cfg.ui.theme = v[size_t(i)];
+            dirty = true;
+        }
+    }
+    {
+        static const char* codes[] = {"system", "en", "zh", "ja", "ko"};
+        int i = 0;
+        for (int k = 0; k < 5; k++)
+            if (a.cfg.ui.language == codes[k]) i = k;
+        if (prefs::choice("Language", "Words in the window; file names never change", &i, {"System", "English", "简体中文", "日本語", "한국어"})) {
+            a.cfg.ui.language = codes[i];
             dirty = true;
         }
     }
@@ -248,6 +259,16 @@ void draw_settings_view(App& a) {
             if (std::abs(a.cfg.ui.font_size - v[k]) < 0.3f) i = int(k);
         if (prefs::choice("Text size", "Everything in the window; Ctrl+ Ctrl– Ctrl+0 too", &i, {"90%", "100%", "115%", "130%"})) {
             a.cfg.ui.font_size = v[size_t(i)];
+            dirty = true;
+        }
+    }
+    {
+        static const char* m[] = {"system", "full", "reduced"};
+        int i = 0;
+        for (int k = 0; k < 3; k++)
+            if (a.cfg.ui.motion == m[k]) i = k;
+        if (prefs::choice("Motion", "Reduced keeps fades and drops sliding; System follows your desktop", &i, {"System", "Full", "Reduced"})) {
+            a.cfg.ui.motion = m[i];
             dirty = true;
         }
     }
@@ -279,7 +300,7 @@ void draw_settings_view(App& a) {
             d.keychain = platform::keychain_available();
             d.at = glfwGetTime();
         }
-        std::string gv = d.gpg_ok ? "GnuPG " + d.gpg_ver : "Not found";
+        std::string gv = d.gpg_ok ? "GnuPG " + d.gpg_ver : std::string(tr("Not found"));
         prefs::info("Encryption program", d.gpg_ok ? display_path(d.gpg_exe).c_str() : platform::install_gpg_hint(), gv.c_str(), d.gpg_ok ? &P.green : &P.red);
         prefs::info("PDF previews", d.pdf.empty() ? platform::install_pdf_hint() : display_path(d.pdf).c_str(),
                     d.pdf.empty() ? "Off" : "On", d.pdf.empty() ? &P.orange : &P.green);

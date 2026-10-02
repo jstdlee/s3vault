@@ -91,12 +91,26 @@ mindmap
   - **Forget vault key** stops encrypted sync.
   - **Export** the password-protected key file, or the raw recovery key.
 - **Mac-style interface.**
-  - A sidebar with All Files, Trash, your synced folders (live status dots), Transfers, Conflicts and Editor (badges).
+  - **No system title bar.** The top strip drags the window, a double-click maximizes it, and every edge resizes.
+    Minimize, maximize and close sit at the top right.
+  - **Utility cluster** at the top right of every view: search (Ctrl+P), tasks and activity log (Ctrl+J, with a
+    progress ring and a count while files move), help (F1) and settings (Ctrl+,).
+  - **Find any feature (Ctrl+P).** Type a few letters of a view, an action, a setting or a term, in English or your
+    language. A setting is scrolled into view and briefly highlighted.
+  - A sidebar with All Files, Trash, your synced folders (live status dots), **Sync a folder** (the one highlighted
+    feature), Transfers, Conflicts and Editor (badges). Drag its edge to resize it (double-click resets); Ctrl+B hides it.
   - A toolbar with back/forward, a clickable path, search, upload, new folder and the inspector toggle.
-  - An inspector with Quick Look, information and actions.
-  - Sheets for every dialog, a three-step setup assistant (storage → vault → first folder), and a lock screen.
-  - Light and dark appearance.
-  - Keyboard: Space Quick Look · Enter/F2 rename · Delete move to Trash · Ctrl+E edit · Ctrl+U upload · Ctrl+Shift+N new folder · Ctrl+F search · Ctrl+I inspector · Alt+←/→ back/forward · Backspace enclosing folder.
+  - An inspector with Quick Look, information and actions; its edge resizes too.
+  - Sheets for every dialog; drag them anywhere and they reopen there. A three-step setup assistant and a lock screen.
+  - **Help (F1)** with Concepts, a Glossary and every keyboard shortcut, searchable.
+  - **Four looks:** System, Light, Dark and Tokyo Night (Ctrl+Shift+T switches).
+  - **Four languages:** English, 简体中文, 日本語 and 한국어, switched at once in Settings; the CJK font follows the
+    language. File names are never translated.
+  - **Motion with a purpose:** the segment pill and the sidebar selection slide (160 ms), sheets and toasts fade in
+    (200 ms). Settings › Motion → Reduced (or the desktop's setting) keeps the fades and drops the sliding.
+  - Keyboard: Ctrl+P find · F1 help · Ctrl+J tasks · Space Quick Look · Enter/F2 rename · Delete move to Trash ·
+    Ctrl+E edit · Ctrl+U upload · Ctrl+Shift+N new folder · Ctrl+Shift+A sync a folder · Ctrl+F search ·
+    Ctrl+I inspector · Ctrl+B sidebar · Ctrl+= / − / 0 text size · Alt+←/→ back/forward · Backspace enclosing folder.
 - **Robust UI.**
   - Network, crypto and tree building run on worker threads; syncing hundreds of MB keeps every frame under 100 ms.
   - If the GPU driver can't open a window (e.g. an LLM is using all unified memory), s3vault restarts itself with software rendering.
@@ -107,6 +121,9 @@ Dark and light follow your desktop setting (or choose in Settings → Appearance
 
 | | |
 |---|---|
+| ![Tokyo Night](docs/screenshots/18-tokyo-night.png) **Tokyo Night**, the frameless window with the utility cluster at the top right and **Sync a folder** highlighted. | ![Palette](docs/screenshots/19-palette-ja.png) **Find any feature (Ctrl+P)**, here in 日本語, with each command's shortcut. |
+| ![Help](docs/screenshots/20-help-zh.png) **Help (F1)** in 简体中文: concepts, glossary and shortcuts. | ![Shortcuts](docs/screenshots/21-shortcuts.png) **Keyboard shortcuts**, from the same list the palette uses. |
+| ![Settings Korean](docs/screenshots/22-settings-ko.png) **Settings** in 한국어: language, theme, text size and motion. | |
 | ![Files](docs/screenshots/01-files.png) **Files.** Sidebar with synced folders and status dots, a Finder-style list, and the inspector with Quick Look. | ![Light](docs/screenshots/13-light-files.png) **Light appearance.** A text file previewed in the inspector (monospaced, from memory). |
 | ![PDF](docs/screenshots/02-pdf-preview.png) **PDF Quick Look**, page by page, from memory. | ![Editor](docs/screenshots/03-editor.png) **Built-in editor.** Ctrl+S saves back with If-Match. |
 | ![Conflicts](docs/screenshots/04-conflicts.png) **Conflicts** grouped by folder; one decision for many files. | ![Compare](docs/screenshots/05-compare.png) **Compare** this device's version with the server's. |
@@ -395,6 +412,7 @@ core/        portable engine, no UI: util, config, store (S3/SigV4), crypto (gpg
              vault, sync (planner + engine), preview, edit (in-memory documents)
 platform/    iface/platform.h + one backend per OS (linux and windows implemented; macos, ios, android reserved)
 app/ui       ImGui panels shared by desktop builds;  app/desktop  GLFW main;  app/mobile  reserved (Flutter)
+app/ui/i18n  strings.py (English → 中文 / 日本語 / 한국어) and gen.py, which writes i18n_table.inc
 cli/         s3vault-cli
 tests/       unit tests, R2 integration script, test helper
 docs/        screenshots

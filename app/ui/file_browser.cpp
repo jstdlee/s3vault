@@ -160,7 +160,7 @@ void draw_file_browser(App& a) {
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(900.0f, vp->WorkSize.x - 40), std::min(560.0f, vp->WorkSize.y - 40)), ImGuiCond_Appearing);
-    std::string title = b.title + id;
+    std::string title = std::string(tr(b.title)) + id;
     bool open = true;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 14));
     ImGui::PushStyleColor(ImGuiCol_PopupBg, P.card);
@@ -192,7 +192,7 @@ void draw_file_browser(App& a) {
         } else b.error = "not found: " + p;
     }
     ImGui::SameLine();
-    if (ImGui::Checkbox("Hidden", &b.show_hidden)) list(b);
+    if (ImGui::Checkbox(tr("Hidden"), &b.show_hidden)) list(b);
 
     float footer = ImGui::GetFrameHeightWithSpacing() * (b.mode == BrowseMode::Save ? 2.3f : 1.3f) + (b.error.empty() ? 0 : ImGui::GetTextLineHeightWithSpacing());
     // Places
@@ -235,9 +235,9 @@ void draw_file_browser(App& a) {
     if (ImGui::BeginTable("items", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable,
                           ImVec2(0, -footer))) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 90);
-        ImGui::TableSetupColumn("Modified", ImGuiTableColumnFlags_WidthFixed, 130);
+        ImGui::TableSetupColumn(tr("Name"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Size"), ImGuiTableColumnFlags_WidthFixed, 90);
+        ImGui::TableSetupColumn(tr("Modified"), ImGuiTableColumnFlags_WidthFixed, 130);
         ImGui::TableHeadersRow();
         ImGuiListClipper clip;
         clip.Begin(int(b.items.size()));
@@ -281,7 +281,7 @@ void draw_file_browser(App& a) {
         if (b.items.empty() && b.error.empty()) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextDisabled("(empty folder)");
+            ImGui::TextDisabled("%s", tr("(empty folder)"));
         }
         ImGui::EndTable();
     }
@@ -293,30 +293,30 @@ void draw_file_browser(App& a) {
     bool enter = !ImGui::IsAnyItemActive() && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
     if (b.mode == BrowseMode::Save) {
         ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputTextWithHint("##name", "File name", b.name_buf, sizeof b.name_buf, ImGuiInputTextFlags_EnterReturnsTrue)) enter = true;
+        if (ImGui::InputTextWithHint("##name", tr("File name"), b.name_buf, sizeof b.name_buf, ImGuiInputTextFlags_EnterReturnsTrue)) enter = true;
     }
     std::string ok_label;
     std::vector<std::string> result;
     switch (b.mode) {
         case BrowseMode::OpenMany: {
             for (auto& n : b.sel) result.push_back(join(b.cwd, n));
-            ok_label = result.empty() ? "Select files or folders" : "Choose " + plural(result.size(), "Item");
-            ImGui::TextDisabled("Ctrl/Shift-click to select several; folders are uploaded with their contents.");
+            ok_label = result.empty() ? "Select files or folders" : trf("Choose %s", tr_n(result.size(), "%zu Item", "%zu Items").c_str());
+            ImGui::TextDisabled("%s", tr("Ctrl/Shift-click to select several; folders are uploaded with their contents."));
             break;
         }
         case BrowseMode::Folder: {
             std::string target = b.sel.empty() ? b.cwd : join(b.cwd, *b.sel.begin());
             result = {target};
-            ok_label = "Choose \"" + path_basename(target) + "\"";
+            ok_label = trf("Choose \"%s\"", path_basename(target).c_str());
             if (target == "/") ok_label = "Choose /";
-            ImGui::TextDisabled("Select a folder, or open it and choose it from inside.");
+            ImGui::TextDisabled("%s", tr("Select a folder, or open it and choose it from inside."));
             break;
         }
         case BrowseMode::Save: {
             std::string name = trim(b.name_buf);
             if (!name.empty()) result = {join(b.cwd, name)};
             ok_label = "Save here";
-            if (!b.confirm_overwrite.empty()) ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), "%s exists; press Save again to replace it.",
+            if (!b.confirm_overwrite.empty()) ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), tr("%s exists; press Save again to replace it."),
                                                                   path_basename(b.confirm_overwrite).c_str());
             break;
         }

@@ -6,8 +6,11 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstring>
+#include <map>
 
 #include "IconsFontAwesome6.h"
+#include "i18n.h"
+#include "motion.h"
 #include "imgui_internal.h"
 #include "preview/preview.h"
 #include "util/strings.h"
@@ -17,6 +20,8 @@ namespace s3v::ui {
 
 Palette P;
 ImFont* g_mono = nullptr;
+float g_title_inset = 0;
+const float kTooltipDelay = 2.0f;  // seconds; the one place to change it
 
 static ImVec4 hex(unsigned v, float a = 1.0f) {
     return ImVec4(float((v >> 16) & 255) / 255.0f, float((v >> 8) & 255) / 255.0f, float(v & 255) / 255.0f, a);
@@ -31,8 +36,17 @@ bool system_prefers_dark() {
     return false;
 }
 
-void apply_theme(bool dark) {
-    if (dark) {
+void apply_theme(int theme) {
+    bool dark = theme != 0;
+    if (theme == 2) {  // Tokyo Night (polish-ui tokens; accent-2 #bb9af7, success #9ece6a, warning #e0af68, info #7dcfff)
+        P.bg = hex(0x1a1b26); P.sidebar = hex(0x16161e); P.card = hex(0x1f2335); P.border = hex(0x292e42);
+        P.divider = hex(0x292e42); P.text = hex(0xc0caf5); P.dim = hex(0x8089b3); P.faint = hex(0x565f89);
+        P.track = hex(0x292e42); P.pill = hex(0x343a55); P.hover = hex(0xc0caf5, 0.05f); P.select = hex(0x7aa2f7, 0.26f);
+        P.accent = hex(0x7aa2f7); P.accent_hover = hex(0x89b4fa); P.on_accent = hex(0x1a1b26);
+        P.red = hex(0xf7768e); P.orange = hex(0xff9e64); P.green = hex(0x9ece6a); P.blue = hex(0x7aa2f7);
+        P.purple = hex(0xbb9af7); P.grey = hex(0x737aa2); P.teal = hex(0x7dcfff); P.yellow = hex(0xe0af68);
+        P.folder = hex(0x7aa2f7);
+    } else if (dark) {
         P.bg = hex(0x1c1c1f); P.sidebar = hex(0x232327); P.card = hex(0x252528); P.border = hex(0x303034);
         P.divider = hex(0x2c2c30); P.text = hex(0xe8e8ec); P.dim = hex(0x8e8e96); P.faint = hex(0x5c5c63);
         P.track = hex(0x2e2e33); P.pill = hex(0x3a3a40); P.hover = hex(0xffffff, 0.045f); P.select = hex(0x0a84ff, 0.30f);
@@ -42,7 +56,7 @@ void apply_theme(bool dark) {
         P.folder = hex(0x5fb2f6);
     } else {
         P.bg = hex(0xf4f4f6); P.sidebar = hex(0xebebef); P.card = hex(0xffffff); P.border = hex(0xe3e3e8);
-        P.divider = hex(0xececf0); P.text = hex(0x212126); P.dim = hex(0x737379);  // Magpie measured #85858d; darkened for WCAG AA P.faint = hex(0xb4b4ba);
+        P.divider = hex(0xececf0); P.text = hex(0x212126); P.dim = hex(0x737379); P.faint = hex(0xb4b4ba);  // dim: Magpie #85858d darkened for WCAG AA
         P.track = hex(0xf1f1f4); P.pill = hex(0xffffff); P.hover = hex(0x000000, 0.035f); P.select = hex(0x007aff, 0.16f);
         P.accent = hex(0x007aff); P.accent_hover = hex(0x2b8fff); P.on_accent = hex(0xffffff);
         P.red = hex(0xff3b30); P.orange = hex(0xff9500); P.green = hex(0x28cd41); P.blue = hex(0x007aff);
@@ -74,6 +88,7 @@ void apply_theme(bool dark) {
     s.TabBorderSize = 0;
     s.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesNone;
     s.SelectableTextAlign = ImVec2(0, 0.5f);
+    s.HoverDelayNormal = kTooltipDelay;  // tooltips wait for a resting pointer (polish-app §5)
 
     ImVec4* c = s.Colors;
     c[ImGuiCol_Text] = P.text;
@@ -132,10 +147,11 @@ void apply_theme(bool dark) {
 
 void tip(const std::string& text) {
     if (!text.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayNormal))
-        ImGui::SetTooltip("%s", text.c_str());
+        ImGui::SetTooltip("%s", tr(text));
 }
 
 bool button(const char* label, Btn kind, ImVec2 size, bool enabled) {
+    label = tr(label);
     ImVec2 ts = ImGui::CalcTextSize(label, nullptr, true);
     float h = size.y > 0 ? size.y : ImGui::GetFrameHeight();
     float w = size.x > 0 ? size.x : ts.x + 28;
@@ -184,7 +200,7 @@ bool icon_button(const char* icon, const char* tip_text, bool on, bool enabled, 
 
 void title_text(const char* text, float scale) {
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * scale);
-    ImGui::TextUnformatted(text);
+    ImGui::TextUnformatted(tr(text));
     ImGui::PopFont();
 }
 
@@ -192,7 +208,7 @@ void small_dim(const char* fmt, ...) {
     char buf[1024];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
+    vsnprintf(buf, sizeof buf, tr(fmt), ap);
     va_end(ap);
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.86f);
     ImGui::TextDisabled("%s", buf);
@@ -211,13 +227,53 @@ void status_text(const ImVec4& c, const char* text) {
     float h = ImGui::GetTextLineHeight(), r = 3.5f;
     ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + h / 2), r, col(c), 16);
     ImGui::SetCursorScreenPos(ImVec2(p.x + r * 2 + 7, p.y));
-    ImGui::TextUnformatted(text);
+    ImGui::TextUnformatted(tr(text));
 }
 
 void focus_ring(float rounding) {
     if (!ImGui::IsItemFocused() || !ImGui::GetIO().NavVisible) return;
     ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
     ImGui::GetWindowDrawList()->AddRect(ImVec2(a.x - 2.5f, a.y - 2.5f), ImVec2(b.x + 2.5f, b.y + 2.5f), col(P.accent, 0.5f), rounding + 2.5f, 0, 3.0f);
+}
+
+void key_chips(const char* keys) {
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.82f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    std::string s = keys;
+    bool first = true;
+    size_t i = 0;
+    float lh = ImGui::GetTextLineHeight();
+    auto chip = [&](const std::string& k) {
+        const char* t = tr(k);
+        ImVec2 ts = ImGui::CalcTextSize(t);
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float w = std::max(ts.x + 10, lh + 4), h = lh + 3;
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.track), 4);
+        dl->AddRect(p, ImVec2(p.x + w, p.y + h), col(P.border), 4);
+        dl->AddText(ImVec2(p.x + (w - ts.x) / 2, p.y + 1.5f), col(P.dim), t);
+        ImGui::Dummy(ImVec2(w, h));
+    };
+    while (i <= s.size()) {
+        size_t alt = s.find(" / ", i);
+        std::string group = s.substr(i, alt == std::string::npos ? std::string::npos : alt - i);
+        if (!first) { ImGui::SameLine(0, 5); ImGui::TextDisabled("/"); ImGui::SameLine(0, 5); }
+        first = false;
+        size_t j = 0;
+        bool firstk = true;
+        while (j <= group.size()) {
+            // "Ctrl+=" and "Ctrl+-": a '+' right after '+' is the key itself
+            size_t plus = group.find('+', j + 1);
+            std::string k = group.substr(j, plus == std::string::npos ? std::string::npos : plus - j);
+            if (!firstk) ImGui::SameLine(0, 3);
+            firstk = false;
+            chip(k);
+            if (plus == std::string::npos) break;
+            j = plus + 1;
+        }
+        if (alt == std::string::npos) break;
+        i = alt + 3;
+    }
+    ImGui::PopFont();
 }
 
 void badge(const std::string& text, const ImVec4& bg, const ImVec4& fg) {
@@ -239,7 +295,7 @@ bool search_field(const char* id, char* buf, size_t n, float width, const char* 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 + icon_w + 7, ImGui::GetStyle().FramePadding.y));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, h / 2);
     ImGui::SetNextItemWidth(width);
-    bool ch = ImGui::InputTextWithHint(id, hint, buf, n);
+    bool ch = ImGui::InputTextWithHint(id, tr(hint), buf, n);
     ImGui::PopStyleVar(2);
     ImVec2 ts = ImGui::CalcTextSize(ICON_FA_MAGNIFYING_GLASS);
     ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + 10, p.y + (h - ts.y) / 2), col(P.dim), ICON_FA_MAGNIFYING_GLASS);
@@ -272,6 +328,8 @@ void spinner(float r, const ImVec4& c) {
 }
 
 void empty_state(const char* icon, const char* title, const char* line) {
+    title = tr(title);
+    line = tr(line);
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float base = ImGui::GetStyle().FontSizeBase;
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(20.0f, avail.y * 0.28f));
@@ -304,9 +362,10 @@ void progress(float f, float width, float height) {
 
 float page_header(const char* title, const char* subtitle) {
     float top = 52;
-    ImGui::SetCursorPos(ImVec2(20, (top - ImGui::GetTextLineHeight() * 1.18f) / 2));
+    ImGui::SetCursorPos(ImVec2(20 + g_title_inset, (top - ImGui::GetTextLineHeight() * 1.18f) / 2));
     title_text(title, 1.18f);
     if (subtitle && *subtitle) {
+        subtitle = tr(subtitle);
         ImGui::SameLine(0, 12);
         ImGui::SetCursorPosY((top - ImGui::GetTextLineHeight()) / 2 + 1);
         small_dim("%s", subtitle);
@@ -365,6 +424,7 @@ ImVec4 status_color(const std::string& s) {
 // sheets
 
 static std::string g_sheet_stack;  // id of the sheet being drawn
+static std::map<std::string, ImVec2> g_sheet_pos;  // where the user dragged each sheet (top-left), this session
 
 bool sheet_begin(std::string& current, const char* id, float width) {
     std::string pid = std::string("##sheet_") + id;
@@ -372,24 +432,33 @@ bool sheet_begin(std::string& current, const char* id, float width) {
     if (want && !ImGui::IsPopupOpen(pid.c_str())) ImGui::OpenPopup(pid.c_str());
     if (!ImGui::IsPopupOpen(pid.c_str())) return false;
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x / 2, vp->WorkPos.y + vp->WorkSize.y * 0.42f), ImGuiCond_Always,
-                            ImVec2(0.5f, 0.5f));
+    // Sheets fade in and settle 8 px into place (200 ms ease-out; no movement under reduced motion). The dimmed
+    // backdrop fades with them. Closing is instant: the sheet has done its job.
+    float k = motion::appear(ImHashStr(pid.c_str()), motion::kSheet);
+    ImGui::GetStyle().Colors[ImGuiCol_ModalWindowDimBg].w = (P.dark ? 0.45f : 0.22f) * k;
+    // Movable (polish-app §4): drag it anywhere; it reopens where it was left; double-click its background to recentre.
+    auto saved = g_sheet_pos.find(id);
+    if (saved != g_sheet_pos.end())
+        ImGui::SetNextWindowPos(ImVec2(saved->second.x, saved->second.y + motion::move(8) * (1 - k)), k < 1 ? ImGuiCond_Always : ImGuiCond_Appearing);
+    else if (k < 1 || ImGui::IsWindowAppearing())
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x / 2, vp->WorkPos.y + vp->WorkSize.y * 0.42f + motion::move(8) * (1 - k)),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(width, vp->WorkSize.x - 40), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22, 20));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 8));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, k);
     ImGui::PushStyleColor(ImGuiCol_PopupBg, P.card);
     bool open = ImGui::BeginPopupModal(pid.c_str(), nullptr,
-                                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                                           ImGuiWindowFlags_AlwaysAutoResize);
+                                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::PopStyleColor();
     if (!open) {
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar(3);
         return false;
     }
     if (!want) {
         ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar(3);
         return false;
     }
     g_sheet_stack = id;
@@ -397,8 +466,23 @@ bool sheet_begin(std::string& current, const char* id, float width) {
 }
 
 void sheet_end() {
+    // Keep it inside the app window, remember where it is, recentre on a double-click on its background.
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImVec2 np(std::clamp(wp.x, vp->WorkPos.x, std::max(vp->WorkPos.x, vp->WorkPos.x + vp->WorkSize.x - ws.x)),
+              std::clamp(wp.y, vp->WorkPos.y, std::max(vp->WorkPos.y, vp->WorkPos.y + vp->WorkSize.y - 48)));
+    if (np.x != wp.x || np.y != wp.y) ImGui::SetWindowPos(np);
+    bool bg = ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered();
+    if (bg && ImGui::IsMouseDoubleClicked(0)) {
+        g_sheet_pos.erase(g_sheet_stack);
+        ImGui::SetWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - ws.x) / 2, vp->WorkPos.y + vp->WorkSize.y * 0.42f - ws.y / 2));
+    } else if (ImGui::IsWindowFocused() && ImGui::IsMouseDragging(0) && bg) {
+        g_sheet_pos[g_sheet_stack] = np;
+    } else if (g_sheet_pos.count(g_sheet_stack)) {
+        g_sheet_pos[g_sheet_stack] = np;
+    }
     ImGui::EndPopup();
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
 }
 
 void sheet_close(std::string& current) {
@@ -415,7 +499,7 @@ void sheet_title(const char* icon, const ImVec4& icon_col, const char* title, co
     title_text(title, 1.2f);
     if (subtitle && *subtitle) {
         ImGui::PushStyleColor(ImGuiCol_Text, P.dim);
-        ImGui::TextWrapped("%s", subtitle);
+        ImGui::TextWrapped("%s", tr(subtitle));
         ImGui::PopStyleColor();
     }
     ImGui::Dummy(ImVec2(0, 4));
@@ -423,6 +507,8 @@ void sheet_title(const char* icon, const ImVec4& icon_col, const char* title, co
 
 int sheet_buttons(const char* primary, const char* cancel, bool primary_enabled, bool destructive, const char* extra, int* extra_clicked) {
     ImGui::Dummy(ImVec2(0, 6));
+    if (primary) primary = tr(primary);
+    if (cancel) cancel = tr(cancel);
     float pw = primary ? ImGui::CalcTextSize(primary).x + 32 : 0;
     float cw = cancel ? ImGui::CalcTextSize(cancel).x + 32 : 0;
     float right = ImGui::GetContentRegionAvail().x;
@@ -452,10 +538,10 @@ int sheet_buttons(const char* primary, const char* cancel, bool primary_enabled,
 }
 
 bool sheet_field(const char* label, char* buf, size_t n, const char* hint, bool password, bool focus) {
-    small_dim("%s", label);
+    small_dim("%s", tr(label));
     ImGui::SetNextItemWidth(-1);
     if (focus && ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    return ImGui::InputTextWithHint((std::string("##") + label).c_str(), hint, buf, n, password ? ImGuiInputTextFlags_Password : 0);
+    return ImGui::InputTextWithHint((std::string("##") + label).c_str(), tr(hint), buf, n, password ? ImGuiInputTextFlags_Password : 0);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -465,6 +551,10 @@ namespace prefs {
 
 bool g_dirty = false;
 static const float kPad = 14;
+static std::string g_locate, g_flash;
+static double g_flash_t0 = 0;
+
+void locate(const char* title) { g_locate = title; }
 struct Card {
     ImVec2 p0;
     float x0 = 0, w = 0;
@@ -481,6 +571,7 @@ void page_begin(float max_width) {
 void page_end() { ImGui::Dummy(ImVec2(0, 24)); }
 
 void section(const char* title, bool caps) {
+    title = tr(title);
     ImGui::Dummy(ImVec2(0, 12));
     std::string up;
     for (const char* s = title; *s; s++) up += caps ? char(toupper(static_cast<unsigned char>(*s))) : *s;
@@ -518,13 +609,30 @@ void row(const char* title, const char* desc, float ctrl_w, const std::function<
     float h = kPad * 2 + lh + (has_desc ? small + 4 : 0);
     if (!g_card.first) dl->AddLine(ImVec2(top.x + kPad, top.y), ImVec2(top.x + g_card.w - 1, top.y), col(P.divider));
     g_card.first = false;
+    if (!g_locate.empty() && g_locate == title) {  // found by feature search: bring it into view, then highlight it
+        ImGui::SetScrollHereY(0.3f);
+        g_flash = title;
+        g_flash_t0 = ImGui::GetTime();
+        g_locate.clear();
+    }
+    if (!g_flash.empty() && g_flash == title) {
+        // State indication: an accent wash that holds for 0.6 s, then fades out over 0.6 s (ease-out).
+        float t = float(ImGui::GetTime() - g_flash_t0);
+        float k = t < 0.6f ? 1.0f : 1.0f - motion::ease_out(std::min(1.0f, (t - 0.6f) / 0.6f));
+        if (k > 0) {
+            dl->AddRectFilled(ImVec2(top.x + 1, top.y + 1), ImVec2(top.x + g_card.w - 1, top.y + h - 1), col(P.accent, 0.16f * k), 9.0f);
+            motion::keep_alive();
+        } else {
+            g_flash.clear();
+        }
+    }
     float text_w = g_card.w - kPad * 3 - ctrl_w;
     ImGui::SetCursorScreenPos(ImVec2(top.x + kPad, top.y + kPad));
-    ImGui::TextUnformatted(title);
+    ImGui::TextUnformatted(tr(title));
     if (has_desc) {
         ImGui::SetCursorScreenPos(ImVec2(top.x + kPad, top.y + kPad + lh + 3));
         ImGui::PushFont(nullptr, small);
-        std::string d = desc;
+        std::string d = tr(desc);
         bool cut = false;
         while (d.size() > 8 && ImGui::CalcTextSize(d.c_str()).x > text_w) {
             size_t k = d.size() - 1;
@@ -535,7 +643,7 @@ void row(const char* title, const char* desc, float ctrl_w, const std::function<
         if (cut) d += "…";
         ImGui::TextDisabled("%s", d.c_str());
         ImGui::PopFont();
-        if (cut || more) tip(more ? std::string(desc) + "\n" + more : std::string(desc));
+        if (cut || more) tip(more ? std::string(tr(desc)) + "\n" + tr(more) : std::string(tr(desc)));
     } else if (more) {
         tip(more);
     }
@@ -552,7 +660,7 @@ void row(const char* title, const char* desc, float ctrl_w, const std::function<
 
 float seg_width(const std::vector<std::string>& labels) {
     float w = 4;
-    for (auto& l : labels) w += ImGui::CalcTextSize(l.c_str()).x + 22;
+    for (auto& l : labels) w += ImGui::CalcTextSize(tr(l)).x + 22;
     return w;
 }
 
@@ -561,11 +669,17 @@ bool seg(const char* id, int* v, const std::vector<std::string>& labels) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float h = ImGui::GetFrameHeight(), w = seg_width(labels);
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.track), 7.0f);
+    std::vector<float> xs(labels.size() + 1);  // segment edges, relative to the track
+    xs[0] = 2;
+    for (size_t i = 0; i < labels.size(); i++) xs[i + 1] = xs[i] + ImGui::CalcTextSize(tr(labels[i])).x + 22;
     bool changed = false;
-    float x = p.x + 2;
     ImGui::PushID(id);
+    // The raised pill slides to the chosen segment (state change made legible; 160 ms ease-in-out, none when reduced).
+    int sel = std::clamp(*v, 0, int(labels.size()) - 1);
+    float pa = motion::tween(ImGui::GetID("##pill_a"), xs[size_t(sel)], motion::kFast);
+    float pb = motion::tween(ImGui::GetID("##pill_b"), xs[size_t(sel) + 1], motion::kFast);
     for (int i = 0; i < int(labels.size()); i++) {
-        float iw = ImGui::CalcTextSize(labels[size_t(i)].c_str()).x + 22;
+        float x = p.x + xs[size_t(i)], iw = xs[size_t(i) + 1] - xs[size_t(i)];
         ImGui::SetCursorScreenPos(ImVec2(x, p.y));
         ImGui::PushID(i);
         if (ImGui::InvisibleButton("##s", ImVec2(iw, h)) && *v != i) {
@@ -575,19 +689,21 @@ bool seg(const char* id, int* v, const std::vector<std::string>& labels) {
         focus_ring(6.0f);
         bool hov = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
         ImGui::PopID();
-        ImVec2 a(x, p.y + 2), b(x + iw, p.y + h - 2);
-        if (*v == i) {
+        if (*v != i && held) dl->AddRectFilled(ImVec2(x, p.y + 2), ImVec2(x + iw, p.y + h - 2), ImGui::GetColorU32(ImGuiCol_FrameBgActive), 6.0f);
+        else if (*v != i && hov) dl->AddRectFilled(ImVec2(x, p.y + 2), ImVec2(x + iw, p.y + h - 2), col(P.hover), 6.0f);
+        if (i == int(labels.size()) - 1) {  // pill above the hover fills, below the labels
+            ImVec2 a(p.x + pa, p.y + 2), b(p.x + pb, p.y + h - 2);
             if (!P.dark) dl->AddRectFilled(ImVec2(a.x, a.y + 1), ImVec2(b.x, b.y + 1), col(ImVec4(0, 0, 0, 0.08f)), 6.0f);
             dl->AddRectFilled(a, b, col(P.pill), 6.0f);
             dl->AddRect(a, b, col(P.border), 6.0f);
-        } else if (held) {  // responds on press, before release
-            dl->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_FrameBgActive), 6.0f);
-        } else if (hov) {
-            dl->AddRectFilled(a, b, col(P.hover), 6.0f);
         }
-        ImVec2 ts = ImGui::CalcTextSize(labels[size_t(i)].c_str());
-        dl->AddText(ImVec2(x + (iw - ts.x) / 2, p.y + (h - ts.y) / 2), col(*v == i || hov ? P.text : P.dim), labels[size_t(i)].c_str());
-        x += iw;
+    }
+    for (int i = 0; i < int(labels.size()); i++) {
+        float x = p.x + xs[size_t(i)], iw = xs[size_t(i) + 1] - xs[size_t(i)];
+        const char* l = tr(labels[size_t(i)]);
+        ImVec2 ts = ImGui::CalcTextSize(l);
+        bool hov = ImGui::IsMouseHoveringRect(ImVec2(x, p.y), ImVec2(x + iw, p.y + h));
+        dl->AddText(ImVec2(x + (iw - ts.x) / 2, p.y + (h - ts.y) / 2), col(*v == i || hov ? P.text : P.dim), l);
     }
     ImGui::PopID();
     ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + h));
@@ -636,17 +752,18 @@ bool number(const char* title, const char* desc, int* v, int lo, int hi, float w
 
 bool action(const char* title, const char* desc, const char* label, Btn kind, bool enabled) {
     bool pressed = false;
-    float w = ImGui::CalcTextSize(label).x + 28;
+    float w = ImGui::CalcTextSize(tr(label)).x + 28;
     row(title, desc, w, [&] { pressed = button(label, kind, ImVec2(w, 0), enabled); });
     return pressed;
 }
 
 void info(const char* title, const char* desc, const char* value, const ImVec4* value_col) {
+    value = tr(value);
     float w = std::min(ImGui::CalcTextSize(value).x + (value_col ? 14 : 0), g_card.w * 0.55f);
     row(title, desc, w, [&] {
         ImGui::AlignTextToFramePadding();
         if (value_col) status_text(*value_col, value);
-        else ImGui::TextDisabled("%s", value);
+        else ImGui::TextDisabled("%s", value);  // already translated above
     });
 }
 

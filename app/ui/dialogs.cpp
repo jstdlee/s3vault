@@ -42,7 +42,7 @@ static void sheet_status(App& a) {
     if (a.modal_busy) {
         spinner(7, P.dim);
         ImGui::SameLine();
-        ImGui::TextDisabled("Working…");
+        ImGui::TextDisabled("%s", tr("Working…"));
     }
     if (!a.modal_error.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, P.red);
@@ -93,7 +93,7 @@ void password_pair(App& a, bool& acceptable) {
     sheet_field("Verify", a.pw2, sizeof a.pw2, "Type it again", true);
     acceptable = strength_meter(a.pw1, a.cfg.security.min_length);
     if (a.pw2[0] && strcmp(a.pw1, a.pw2) != 0) {
-        ImGui::TextColored(P.red, "The passwords don't match.");
+        ImGui::TextColored(P.red, "%s", tr("The passwords don't match."));
         acceptable = false;
     }
     if (!a.pw2[0]) acceptable = false;
@@ -102,7 +102,7 @@ void password_pair(App& a, bool& acceptable) {
         snprintf(a.pw1, sizeof a.pw1, "%s", g.c_str());
         snprintf(a.pw2, sizeof a.pw2, "%s", g.c_str());
         glfwSetClipboardString(a.win, g.c_str());
-        a.notify("Password copied — save it in your password manager");
+        a.notify(tr("Password copied — save it in your password manager"));
         wipe(g);
     }
 }
@@ -158,7 +158,7 @@ void draw_modals(App& a) {
         if (r == 1 && v) {
             std::string old = a.pw_old, nw = a.pw1;
             run_sheet_job(a, [v, old, nw]() mutable { OpResult x = v->set_password(old, nw); wipe(old); wipe(nw); return x; },
-                          [&a] { a.vault_has_key = true; a.notify("Password saved"); });
+                          [&a] { a.vault_has_key = true; a.notify(tr("Password saved")); });
         } else if (r == 2) {
             close_sheet(a);
         }
@@ -168,7 +168,7 @@ void draw_modals(App& a) {
     // ---- upload ----
     if (sheet_begin(a.modal, "upload", 500)) {
         size_t n = a.pending_uploads.size();
-        std::string title = n == 1 ? "Upload \"" + path_basename(a.pending_uploads[0]) + "\"" : "Upload " + std::to_string(n) + " Items";
+        std::string title = n == 1 ? trf("Upload \"%s\"", path_basename(a.pending_uploads[0]).c_str()) : trf("Upload %d Items", int(n));
         sheet_title(ICON_FA_CLOUD_ARROW_UP, P.accent, title.c_str(), "Folders are uploaded with everything inside them.");
         std::vector<std::string> lines;
         for (auto& f : a.pending_uploads) lines.push_back(display_path(f));
@@ -178,14 +178,14 @@ void draw_modals(App& a) {
         int enc = a.upload_encrypt ? 1 : 0;
         small_dim("Encryption");
         if (!a.vault_has_key) {
-            ImGui::TextDisabled("Set a vault password in Settings to upload encrypted files.");
+            ImGui::TextDisabled("%s", tr("Set a vault password in Settings to upload encrypted files."));
         } else if (prefs::seg("enc", &enc, {"Plain", "Encrypted (OpenPGP)"})) {
             a.upload_encrypt = enc == 1;
         }
         small_dim("If a file with the same name exists");
         prefs::seg("exists", &a.upload_on_exists, {"Replace", "Keep both", "Skip"});
         bool need_key = a.upload_encrypt && v && !v->unlocked();
-        if (need_key) ImGui::TextColored(P.orange, ICON_FA_LOCK "  Unlock the vault to encrypt.");
+        if (need_key) ImGui::TextColored(P.orange, "%s", tr(ICON_FA_LOCK "  Unlock the vault to encrypt."));
         int r = sheet_buttons(need_key ? "Unlock…" : "Upload", "Cancel", true);
         if (r == 1) {
             if (need_key) {
@@ -256,10 +256,10 @@ void draw_modals(App& a) {
         std::vector<std::string> targets;
         if (a.modal == "delete") targets.push_back(a.modal_arg);
         else targets.assign(a.multi.begin(), a.multi.end());
-        std::string title = targets.size() == 1 ? "Move \"" + path_basename(targets[0]) + "\" to the Trash?"
-                                                : "Move " + std::to_string(targets.size()) + " Items to the Trash?";
-        std::string sub = "You can restore it from Trash for " + std::to_string(a.cfg.sync.trash_days) +
-                          " days. Synced copies on your other devices move to their trash too.";
+        std::string title = targets.size() == 1 ? trf("Move \"%s\" to the Trash?", path_basename(targets[0]).c_str())
+                                                : trf("Move %d Items to the Trash?", int(targets.size()));
+        std::string sub = trf("You can restore it from Trash for %d days. Synced copies on your other devices move to their trash too.",
+                              a.cfg.sync.trash_days);
         sheet_title(ICON_FA_TRASH, P.red, title.c_str(), sub.c_str());
         if (targets.size() > 1) {
             std::vector<std::string> lines;
@@ -293,7 +293,7 @@ void draw_modals(App& a) {
 
     // ---- keep a folder in sync ----
     if (sheet_begin(a.modal, "add-root", 520)) {
-        std::string sub = display_path(a.modal_arg) + " will stay in sync with a folder in your vault.";
+        std::string sub = trf("%s will stay in sync with a folder in your vault.", display_path(a.modal_arg).c_str());
         sheet_title(ICON_FA_ARROWS_ROTATE, P.green, "Keep a Folder in Sync", sub.c_str());
         sheet_field("Vault folder", a.text_buf, sizeof a.text_buf, "e.g. Documents");
         small_dim("Direction");
@@ -321,7 +321,7 @@ void draw_modals(App& a) {
                 close_sheet(a);
                 a.engine->request_sync();
                 a.tree_dirty = true;
-                a.notify("Syncing " + display_path(a.modal_arg));
+                a.notify(trf("Syncing %s", display_path(a.modal_arg).c_str()));
                 navigate(a, rp);
             }
         } else if (r == 2) {
@@ -377,7 +377,7 @@ void draw_modals(App& a) {
                     v->refresh();
                     if (fails) return OpResult::fail(std::to_string(fails) + " could not be resolved: " + last);
                     return OpResult::success();
-                }, [&a, n = ids.size()] { a.conflict_sel.clear(); a.tree_dirty = true; a.notify("Resolved " + plural(n, "conflict")); });
+                }, [&a, n = ids.size()] { a.conflict_sel.clear(); a.tree_dirty = true; a.notify(trf("Resolved %s", tr_n(n, "%zu conflict", "%zu conflicts").c_str())); });
             }
         } else if (r == 2) {
             close_sheet(a);
@@ -414,7 +414,7 @@ void draw_modals(App& a) {
             });
         }
         sheet_title(nullptr, P.dim, have ? path_basename(c.rel).c_str() : "Resolved", have ? ("/" + c.rel).c_str() : nullptr);
-        if (loading) { spinner(7, P.dim); ImGui::SameLine(); ImGui::TextDisabled("Loading…"); }
+        if (loading) { spinner(7, P.dim); ImGui::SameLine(); ImGui::TextDisabled("%s", tr("Loading…")); }
         if (!err.empty()) ImGui::TextColored(P.red, "%s", err.c_str());
         bool text = preview_kind(c.rel) == PreviewKind::Text && utf8_valid(local_txt) && utf8_valid(remote_txt);
         float colw = (ImGui::GetContentRegionAvail().x - 12) / 2;
@@ -434,12 +434,12 @@ void draw_modals(App& a) {
             ImGui::BeginChild(side == 0 ? "##l" : "##r", ImVec2(colw, 400), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
             ImGui::SetCursorPos(ImVec2(10, 8));
             ImGui::BeginGroup();
-            if (!exists) ImGui::TextDisabled("(deleted)");
+            if (!exists) ImGui::TextDisabled("%s", tr("(deleted)"));
             else if (text) {
                 if (g_mono) ImGui::PushFont(g_mono, 0.0f);
                 ImGui::TextUnformatted(t.data(), t.data() + t.size());
                 if (g_mono) ImGui::PopFont();
-            } else ImGui::TextDisabled("%s · SHA-256 %s", human_size(t.size()).c_str(), sha256_hex(t).substr(0, 16).c_str());
+            } else ImGui::TextDisabled(tr("%s · SHA-256 %s"), human_size(t.size()).c_str(), sha256_hex(t).substr(0, 16).c_str());
             ImGui::EndGroup();
             ImGui::EndChild();
             ImGui::PopStyleColor();
@@ -458,10 +458,10 @@ void draw_modals(App& a) {
     // ---- export key ----
     if (sheet_begin(a.modal, "export-key", 520)) {
         sheet_title(ICON_FA_KEY, P.accent, "Export Key", nullptr);
-        ImGui::Text("Backup key file");
+        ImGui::Text("%s", tr("Backup key file"));
         ImGui::PushStyleColor(ImGuiCol_Text, P.dim);
-        ImGui::TextWrapped("A copy of key.gpg, still protected by your password. Safe to keep anywhere. "
-                           "With it and your password the vault opens even if the server's copy is lost.");
+        ImGui::TextWrapped("%s", tr("A copy of key.gpg, still protected by your password. Safe to keep anywhere. "
+                           "With it and your password the vault opens even if the server's copy is lost."));
         ImGui::PopStyleColor();
         ImGui::BeginDisabled(a.modal_busy);
         if (button(ICON_FA_DOWNLOAD "  Save Key File…")) {
@@ -472,7 +472,7 @@ void draw_modals(App& a) {
                     std::string ct;
                     OpResult x = v->key_file(ct);
                     if (x.ok && !write_file_atomic(dest, ct, 0600)) x = OpResult::fail("cannot write " + dest);
-                    a.post([&a, x, dest] { a.notify(x.ok ? "Saved key file to " + display_path(dest) : x.error, !x.ok); });
+                    a.post([&a, x, dest] { a.notify(x.ok ? trf("Saved key file to %s", display_path(dest).c_str()) : x.error, !x.ok); });
                 });
             }, "s3vault-" + a.cfg.storage.bucket + "-key.gpg");
         }
@@ -480,10 +480,10 @@ void draw_modals(App& a) {
         ImGui::Dummy(ImVec2(0, 6));
         ImGui::Separator();
         ImGui::Dummy(ImVec2(0, 4));
-        ImGui::TextColored(P.orange, ICON_FA_TRIANGLE_EXCLAMATION "  Recovery key");
+        ImGui::TextColored(P.orange, "%s", tr(ICON_FA_TRIANGLE_EXCLAMATION "  Recovery key"));
         ImGui::PushStyleColor(ImGuiCol_Text, P.dim);
-        ImGui::TextWrapped("The raw vault key. Anyone who has it can read every file without your password, and changing the "
-                           "password does not change it. Keep it offline — in a password manager or on paper.");
+        ImGui::TextWrapped("%s", tr("The raw vault key. Anyone who has it can read every file without your password, and changing the "
+                           "password does not change it. Keep it offline — in a password manager or on paper."));
         ImGui::PopStyleColor();
         sheet_field("Confirm with your vault password", a.pw1, sizeof a.pw1, "", true);
         sheet_status(a);
@@ -508,7 +508,7 @@ void draw_modals(App& a) {
         if (button("Copy Recovery Key", Btn::Secondary, ImVec2(0, 0), can)) {
             get_key([&a](std::string k) {
                 glfwSetClipboardString(a.win, k.c_str());
-                a.notify("Recovery key copied — paste it into your password manager");
+                a.notify(tr("Recovery key copied — paste it into your password manager"));
             });
         }
         ImGui::SameLine();
@@ -522,7 +522,7 @@ void draw_modals(App& a) {
                                        std::string(keep->view()) + "\n";
                     bool ok = write_file_atomic(p[0], text, 0600);
                     wipe(text);
-                    a.notify(ok ? "Saved recovery key to " + display_path(p[0]) + " (only you can read it)" : "cannot write " + p[0], !ok);
+                    a.notify(ok ? trf("Saved recovery key to %s (only you can read it)", display_path(p[0]).c_str()) : trf("Can't write %s", p[0].c_str()), !ok);
                 }, "s3vault-recovery-key.txt");
             });
         }
@@ -542,7 +542,7 @@ void draw_modals(App& a) {
                 OpResult x = v->purge_trash(0, &n);
                 eng->log("Emptied the vault trash: " + plural(n, "object") + " deleted");
                 return x;
-            }, [&a] { a.trash_dirty = true; a.trash_sel.clear(); a.notify("Trash emptied"); });
+            }, [&a] { a.trash_dirty = true; a.trash_sel.clear(); a.notify(tr("Trash emptied")); });
         } else if (r == 2) {
             close_sheet(a);
         }

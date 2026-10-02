@@ -54,6 +54,11 @@ struct UiConfig {
     std::string theme = "system";  // system | light | dark
     int inspector = 1;             // show the inspector pane
     int advanced = 0;              // "Show advanced settings"
+    std::string language = "system";  // system | en | ja | ko
+    std::string motion = "system";    // system | full | reduced
+    int maximized = 0;
+    int tip_palette = 0;  // the "Press Ctrl+P" tip was dismissed
+    float sidebar_w = 232, inspector_w = 330;
 };
 
 struct Config {

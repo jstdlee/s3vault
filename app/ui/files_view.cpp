@@ -23,7 +23,7 @@ static const Node* current_folder(App& a) {
     return n && n->dir ? n : nullptr;
 }
 
-static std::string folder_title(const std::string& logical) { return logical.empty() ? "All Files" : path_basename(logical); }
+static std::string folder_title(const std::string& logical) { return logical.empty() ? std::string(tr("All Files")) : path_basename(logical); }
 
 static void select_only(App& a, const std::string& path) {
     if (a.selected != path && a.preview.state != PreviewState::Empty) preview_free(a);
@@ -45,7 +45,7 @@ static void begin_delete(App& a) {
 static void quick_look(App& a, const Node& n) {
     if (n.dir) return;
     if (preview_kind(n.logical) == PreviewKind::None) {
-        a.notify("No preview for this kind of file — use Download", true);
+        a.notify(tr("No preview for this kind of file — use Download"), true);
         return;
     }
     a.cfg.ui.inspector = 1;
@@ -57,18 +57,18 @@ static void context_menu(App& a, const Node& n) {
     if (!ImGui::BeginPopupContextItem()) return;
     if (!a.multi.count(n.logical)) select_only(a, n.logical);
     if (n.dir) {
-        if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "   Open")) navigate(a, n.logical);
+        if (ImGui::MenuItem(tr(ICON_FA_FOLDER_OPEN "   Open"))) navigate(a, n.logical);
     } else {
-        if (ImGui::MenuItem(ICON_FA_EYE "   Quick Look", "Space", false, preview_kind(n.logical) != PreviewKind::None)) quick_look(a, n);
-        if (ImGui::MenuItem(ICON_FA_PEN_TO_SQUARE "   Edit", "Ctrl+E", false, preview_kind(n.logical) == PreviewKind::Text)) open_in_editor(a, n.entry);
-        if (ImGui::MenuItem(ICON_FA_DOWNLOAD "   Download…")) download_to_dialog(a, n.entry);
+        if (ImGui::MenuItem(tr(ICON_FA_EYE "   Quick Look"), tr("Space"), false, preview_kind(n.logical) != PreviewKind::None)) quick_look(a, n);
+        if (ImGui::MenuItem(tr(ICON_FA_PEN_TO_SQUARE "   Edit"), "Ctrl+E", false, preview_kind(n.logical) == PreviewKind::Text)) open_in_editor(a, n.entry);
+        if (ImGui::MenuItem(tr(ICON_FA_DOWNLOAD "   Download…"))) download_to_dialog(a, n.entry);
     }
     ImGui::Separator();
-    if (ImGui::MenuItem(ICON_FA_PEN "   Rename…", "F2")) begin_rename(a, n.logical);
-    if (ImGui::MenuItem(ICON_FA_COPY "   Copy Path")) glfwSetClipboardString(a.win, ("/" + n.logical).c_str());
+    if (ImGui::MenuItem(tr(ICON_FA_PEN "   Rename…"), "F2")) begin_rename(a, n.logical);
+    if (ImGui::MenuItem(tr(ICON_FA_COPY "   Copy Path"))) glfwSetClipboardString(a.win, ("/" + n.logical).c_str());
     ImGui::Separator();
     ImGui::PushStyleColor(ImGuiCol_Text, P.red);
-    if (ImGui::MenuItem(ICON_FA_TRASH "   Move to Trash", "Delete")) begin_delete(a);
+    if (ImGui::MenuItem(tr(ICON_FA_TRASH "   Move to Trash"), "Delete")) begin_delete(a);
     ImGui::PopStyleColor();
     ImGui::EndPopup();
 }
@@ -98,16 +98,17 @@ static void toolbar(App& a) {
     float mid = ImGui::GetCursorPosY() + 15;
     auto crumb = [&](const std::string& label, const std::string& path, bool last) {
         ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * (last ? 1.12f : 1.0f));
-        ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        const char* lbl = path.empty() ? tr(label) : label.c_str();  // "All Files" is ours; folder names are not
+        ImVec2 ts = ImGui::CalcTextSize(lbl);
         ImGui::SetCursorPosY(mid - ts.y / 2);
         ImVec2 p = ImGui::GetCursorScreenPos();
         ImGui::PushID(path.c_str());
         bool click = ImGui::InvisibleButton("##crumb", ts);
         ImGui::PopID();
         bool hov = ImGui::IsItemHovered() && !last;
-        ImGui::GetWindowDrawList()->AddText(p, col(last || hov ? P.text : P.dim), label.c_str());
+        ImGui::GetWindowDrawList()->AddText(p, col(last || hov ? P.text : P.dim), lbl);
         ImGui::PopFont();
-        if (!last) tip("Go to " + label);
+        if (!last) tip(trf("Go to %s", label.c_str()));
         if (click && !last) navigate(a, path);
     };
     auto chevron = [&] {
@@ -131,7 +132,7 @@ static void toolbar(App& a) {
     }
 
     // Right side
-    float right = ImGui::GetWindowWidth() - 12;
+    float right = ImGui::GetWindowWidth() - 12 - a.chrome_right;
     float icons_w = 4 * 32;
     float search_w = std::clamp(ImGui::GetWindowWidth() * 0.22f, 150.0f, 260.0f);
     ImGui::SetCursorPos(ImVec2(right - icons_w - search_w - 10, 10 + (30 - ImGui::GetFrameHeight()) / 2));
@@ -156,10 +157,10 @@ static void toolbar(App& a) {
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
     if (ImGui::BeginPopup("##more")) {
-        if (ImGui::MenuItem(ICON_FA_ARROWS_ROTATE "   Refresh", "Ctrl+R")) refresh_listing(a);
+        if (ImGui::MenuItem(tr(ICON_FA_ARROWS_ROTATE "   Refresh"), "Ctrl+R")) refresh_listing(a);
         ImGui::Separator();
-        if (ImGui::MenuItem(ICON_FA_DOWNLOAD "   Download Everything (Decrypted)…")) start_download_all(a, true);
-        if (ImGui::MenuItem(ICON_FA_LOCK "   Download Everything (As Stored)…")) start_download_all(a, false);
+        if (ImGui::MenuItem(tr(ICON_FA_DOWNLOAD "   Download Everything (Decrypted)…"))) start_download_all(a, true);
+        if (ImGui::MenuItem(tr(ICON_FA_LOCK "   Download Everything (As Stored)…"))) start_download_all(a, false);
         ImGui::Separator();
         int tf = a.type_filter;
         const char* types[] = {"All Kinds", "Text & Code", "Images", "PDFs", "Encrypted Files"};
@@ -207,7 +208,7 @@ static void draw_rows(App& a, const Node& n, int depth) {
         if (k.tracked_root) {
             ImGui::SameLine(0, 6);
             ImGui::TextColored(P.green, ICON_FA_ARROWS_ROTATE);
-            tip("Kept in sync with " + k.tracked_info);
+            tip(trf("Kept in sync with %s", k.tracked_info.c_str()));
         }
         if (clicked) {
             ImGuiIO& io = ImGui::GetIO();
@@ -240,18 +241,18 @@ static void draw_rows(App& a, const Node& n, int depth) {
         ImGui::TextDisabled("%s", k.dir ? "—" : human_size(k.size).c_str());
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", k.dir ? "Folder" : file_type_label(k.name));
+        ImGui::TextDisabled("%s", tr(k.dir ? "Folder" : file_type_label(k.name)));
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
         if (k.dir && k.tracked_root) {
             status_dot(P.green, 3.5f, ImGui::GetStyle().FramePadding.y);
             ImGui::SameLine(0, 6);
-            ImGui::TextDisabled("Synced folder");
-            tip("Kept in sync with " + k.tracked_info);
+            ImGui::TextDisabled("%s", tr("Synced folder"));
+            tip(trf("Kept in sync with %s", k.tracked_info.c_str()));
         } else if (!k.dir && !k.status.empty()) {
             status_dot(status_color(k.status), 3.5f, ImGui::GetStyle().FramePadding.y);
             ImGui::SameLine(0, 6);
-            ImGui::TextDisabled("%s", k.status.c_str());
+            ImGui::TextDisabled("%s", tr(k.status));
             tip(status_help(k.status));
         }
         if (k.dir && open) {
@@ -326,11 +327,11 @@ static void list(App& a, float width, float height) {
         if (ImGui::BeginTable("##files", 5, tf, ImVec2(0, 0))) {
             ImGui::TableSetupScrollFreeze(0, 1);
             // All columns stretch by weight, so the name always gets most of the width.
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_DefaultSort, 3.2f, 0);
-            ImGui::TableSetupColumn("Date Modified", ImGuiTableColumnFlags_WidthStretch, 1.35f, 3);
-            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 0.7f, 2);
-            ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthStretch, 0.75f, 1);
-            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.1f, 4);
+            ImGui::TableSetupColumn(tr("Name"), ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_DefaultSort, 3.2f, 0);
+            ImGui::TableSetupColumn(tr("Date Modified"), ImGuiTableColumnFlags_WidthStretch, 1.35f, 3);
+            ImGui::TableSetupColumn(tr("Size"), ImGuiTableColumnFlags_WidthStretch, 0.7f, 2);
+            ImGui::TableSetupColumn(tr("Kind"), ImGuiTableColumnFlags_WidthStretch, 0.75f, 1);
+            ImGui::TableSetupColumn(tr("Status"), ImGuiTableColumnFlags_WidthStretch, 1.1f, 4);
             // Quiet header: dim labels on the card colour, a single divider underneath.
             ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
             for (int c = 0; c < 5; c++) {
@@ -364,12 +365,12 @@ static void status_bar(App& a, float width) {
     ImGui::AlignTextToFramePadding();
     size_t items = folder ? folder->kids.size() : 0;
     size_t nsel = a.multi.empty() ? (a.selected.empty() ? 0 : 1) : a.multi.size();
-    std::string s = std::to_string(items) + (items == 1 ? " item" : " items");
-    if (nsel) s += " · " + std::to_string(nsel) + " selected";
+    std::string s = tr_n(items, "%zu item", "%zu items");
+    if (nsel) s += " · " + trf("%d selected", int(nsel));
     if (folder) s += " · " + human_size(folder->size);
     small_dim("%s", s.c_str());
     if (a.listed_at) {
-        std::string u = "Updated " + format_local_time(a.listed_at);
+        std::string u = trf("Updated %s", format_local_time(a.listed_at).c_str());
         ImGui::SameLine(std::max(0.0f, width - ImGui::CalcTextSize(u.c_str()).x - 24));
         small_dim("%s", u.c_str());
     }
@@ -381,11 +382,11 @@ static void status_bar(App& a, float width) {
 static void kv(const char* k, const std::string& v, const ImVec4* c = nullptr) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
-    ImGui::TextDisabled("%s", k);
+    ImGui::TextDisabled("%s", tr(k));
     ImGui::TableNextColumn();
     ImGui::PushTextWrapPos(0.0f);
     if (c) status_text(*c, v.c_str());
-    else ImGui::TextUnformatted(v.c_str());
+    else ImGui::TextUnformatted(tr(v));
     ImGui::PopTextWrapPos();
 }
 
@@ -433,7 +434,7 @@ static void inspector(App& a, float width, float height) {
         uint64_t total = 0;
         for (auto& m : a.multi)
             if (const Node* x = find_node(a.tree.get(), m)) total += x->size;
-        centered_text(std::to_string(nmulti) + " items selected", 1.15f);
+        centered_text(tr_n(nmulti, "%zu item selected", "%zu items selected"), 1.15f);
         centered_text(human_size(total), 0.92f, &P.dim);
         ImGui::Dummy(ImVec2(0, 14));
         if (button(ICON_FA_TRASH "  Move to Trash", Btn::Destructive, ImVec2(inner, 0))) a.modal = "delete-multi";
@@ -443,7 +444,7 @@ static void inspector(App& a, float width, float height) {
         ImGui::Dummy(ImVec2(0, 30));
         big_icon(a.cwd.empty() ? ICON_FA_VAULT : ICON_FA_FOLDER, a.cwd.empty() ? P.accent : P.folder, 4.0f);
         centered_text(folder_title(a.cwd), 1.2f);
-        if (f) centered_text(std::to_string(f->kids.size()) + " items · " + human_size(f->size), 0.92f, &P.dim);
+        if (f) centered_text(tr_n(f->kids.size(), "%zu item", "%zu items") + " · " + human_size(f->size), 0.92f, &P.dim);
         if (f && f->tracked) {
             ImGui::Dummy(ImVec2(0, 6));
             std::string t = std::string(ICON_FA_ARROWS_ROTATE "  ") + (f->tracked_root ? "Synced with " : "Inside ") + f->tracked_info;
@@ -457,7 +458,7 @@ static void inspector(App& a, float width, float height) {
         }
         ImGui::Dummy(ImVec2(0, 10));
         ImGui::PushStyleColor(ImGuiCol_Text, P.dim);
-        ImGui::TextWrapped("Select a file to see its details. Nothing is downloaded or decrypted until you ask for a preview.");
+        ImGui::TextWrapped("%s", tr("Select a file to see its details. Nothing is downloaded or decrypted until you ask for a preview."));
         ImGui::PopStyleColor();
     } else {
         // Preview area / big icon
@@ -482,7 +483,7 @@ static void inspector(App& a, float width, float height) {
         }
         ImGui::Dummy(ImVec2(0, 8));
         centered_text(n->name, 1.15f);
-        std::string sub = n->dir ? "Folder · " + human_size(n->size) : std::string(file_type_label(n->name)) + " · " + human_size(n->size);
+        std::string sub = std::string(tr(n->dir ? "Folder" : file_type_label(n->name))) + " · " + human_size(n->size);
         centered_text(sub, 0.9f, &P.dim);
         ImGui::Dummy(ImVec2(0, 10));
 
@@ -519,7 +520,7 @@ static void inspector(App& a, float width, float height) {
             ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Synced with").x + 18);
             ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
             kv("Kind", n->dir ? "Folder" : file_type_label(n->name));
-            kv("Size", human_size(n->size) + (n->dir || !n->entry.encrypted ? "" : " (encrypted)"));
+            kv("Size", human_size(n->size) + (n->dir || !n->entry.encrypted ? std::string() : " " + std::string(tr("(encrypted)"))));
             kv("Modified", format_local_time(n->mtime));
             kv("Where", "/" + (path_dirname(n->logical).empty() ? std::string() : path_dirname(n->logical)));
             if (!n->dir) {
@@ -537,7 +538,7 @@ static void inspector(App& a, float width, float height) {
             ImGui::Dummy(ImVec2(0, 2));
             ImGui::PushStyleColor(ImGuiCol_Text, P.dim);
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + inner);
-            ImGui::TextWrapped("%s", status_help(n->status));
+            ImGui::TextWrapped("%s", tr(status_help(n->status)));
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
         }
@@ -566,7 +567,7 @@ void draw_files_view(App& a) {
         dl->AddRectFilled(p, ImVec2(p.x + W, p.y + bh), col(P.yellow, P.dark ? 0.12f : 0.18f));
         ImGui::SetCursorPos(ImVec2(16, top + (bh - ImGui::GetFrameHeight()) / 2));
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(P.dark ? P.yellow : ImVec4(0.55f, 0.4f, 0, 1), ICON_FA_LOCK "  Encrypted files are locked — you can see names, not contents, and they don't sync.");
+        ImGui::TextColored(P.dark ? P.yellow : ImVec4(0.55f, 0.4f, 0, 1), "%s", tr(ICON_FA_LOCK "  Encrypted files are locked — you can see names, not contents, and they don't sync."));
         ImGui::SameLine(W - 120);
         if (button("Unlock…", Btn::Primary, ImVec2(100, 0))) a.modal = "unlock";
         top += bh;
@@ -593,6 +594,15 @@ void draw_files_view(App& a) {
         ImGui::InvisibleButton("##split", ImVec2(6, H - top));
         if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         if (ImGui::IsItemActive()) a.inspector_w = std::clamp(a.inspector_w - ImGui::GetIO().MouseDelta.x, 260.0f, W * 0.5f);
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) a.inspector_w = 330;  // reset
+        if (ImGui::IsItemDeactivated() || (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))) {
+            a.cfg.ui.inspector_w = a.inspector_w;
+            save_settings(a);
+        }
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+            ImVec2 sp = ImGui::GetItemRectMin();
+            ImGui::GetForegroundDrawList()->AddLine(ImVec2(sp.x + 3, sp.y), ImVec2(sp.x + 3, sp.y + H - top), col(P.accent), 2);
+        }
         ImGui::SetCursorPos(ImVec2(W - iw, top));
         inspector(a, iw, H - top);
     }

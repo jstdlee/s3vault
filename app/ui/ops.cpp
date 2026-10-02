@@ -25,7 +25,7 @@ static std::string join_logical(const std::string& dir, const std::string& name)
 
 void start_uploads(App& a, const std::vector<std::string>& files) {
     if (a.conn != App::Conn::Ready) {
-        a.notify("Not connected", true);
+        a.notify(tr("Not connected"), true);
         return;
     }
     a.pending_uploads = files;
@@ -35,13 +35,13 @@ void start_uploads(App& a, const std::vector<std::string>& files) {
 }
 
 void choose_and_upload(App& a) {
-    browse(a, BrowseMode::OpenMany, a.cwd.empty() ? "Upload to All Files" : "Upload to " + path_basename(a.cwd),
+    browse(a, BrowseMode::OpenMany, a.cwd.empty() ? std::string(tr("Upload to All Files")) : trf("Upload to %s", path_basename(a.cwd).c_str()),
            [&a](std::vector<std::string> f) { start_uploads(a, f); });
 }
 
 void add_tracked_folder(App& a) {
     if (a.conn != App::Conn::Ready) {
-        a.notify("Connect to your storage first", true);
+        a.notify(tr("Connect to your storage first"), true);
         return;
     }
     browse(a, BrowseMode::Folder, "Choose a Folder to Keep in Sync", [&a](std::vector<std::string> d) {
@@ -193,9 +193,9 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
         int nok = ok, nskip = skipped, nfail = failed;
         a.post([&a, nok, nskip, nfail, last_err] {
             a.tree_dirty = true;
-            std::string m = "Uploaded " + plural(nok, "file");
-            if (nskip) m += ", skipped " + std::to_string(nskip);
-            if (nfail) m += ", " + std::to_string(nfail) + " failed: " + last_err;
+            std::string m = trf("Uploaded %s", tr_n(size_t(nok), "%zu file", "%zu files").c_str());
+            if (nskip) m += trf(", skipped %d", int(nskip));
+            if (nfail) m += trf(", %d failed: %s", int(nfail), last_err.c_str());
             a.notify(m, nfail > 0);
             if (a.engine) a.engine->request_sync();
         });
@@ -231,7 +231,7 @@ void download_all(App& a, const std::string& dest_parent, bool decrypt) {
         if (!decrypt)  // vault metadata: needed to open the encrypted copy later
             for (const char* m : {".s3vault/vault.json", ".s3vault/key.gpg"})
                 items.push_back({v->prefix() + m, dest + "/" + m, 0, 0, true});
-        if (!mkdirs(dest, 0700)) { a.post([&a, dest] { a.notify("Can't create " + display_path(dest), true); }); return; }
+        if (!mkdirs(dest, 0700)) { a.post([&a, dest] { a.notify(trf("Can't create %s", display_path(dest).c_str()), true); }); return; }
         for (auto& it : items) it.tid = eng->transfer_begin("download", it.out.substr(dest.size() + 1), it.size, true);
         eng->log("Downloading " + plural(items.size(), "file") + (decrypt ? " (decrypted)" : " (encrypted, as stored)") + " to " +
                  display_path(dest));
@@ -256,7 +256,8 @@ void download_all(App& a, const std::string& dest_parent, bool decrypt) {
         int nok = ok, nf = failed;
         eng->log("Download finished: " + plural(size_t(nok), "file") + " saved" + (nf ? ", " + std::to_string(nf) + " failed" : "") + " in " + display_path(dest));
         a.post([&a, nok, nf, dest] {
-            a.notify("Downloaded " + plural(nok, "file") + " to " + display_path(dest) + (nf ? " — " + std::to_string(nf) + " failed (see Transfers)" : ""), nf > 0);
+            a.notify(trf("Downloaded %s to %s", tr_n(size_t(nok), "%zu file", "%zu files").c_str(), display_path(dest).c_str()) +
+                     (nf ? trf(" — %d failed (see Transfers)", int(nf)) : std::string()), nf > 0);
         });
     });
 }
@@ -281,7 +282,7 @@ void open_in_editor(App& a, const RemoteEntry& e) {
     }
     size_t cap = size_t(std::max(1, a.cfg.preview.text_max_mb)) << 20;
     if (e.size > cap + (e.encrypted ? 4096 : 0)) {
-        a.notify("Too large for the built-in editor (" + human_size(e.size) + ", limit " + human_size(cap) + ")", true);
+        a.notify(trf("Too large for the built-in editor (%s, limit %s)", human_size(e.size).c_str(), human_size(cap).c_str()), true);
         return;
     }
     auto em = a.edits;
@@ -290,7 +291,7 @@ void open_in_editor(App& a, const RemoteEntry& e) {
         int id = em->open(e, err);
         a.post([&a, id, err, name = e.logical] {
             if (!id) {
-                a.notify("Cannot edit " + name + ": " + err, true);
+                a.notify(trf("Cannot edit %s: %s", name.c_str(), err.c_str()), true);
                 return;
             }
             a.edit_focus = id;
@@ -305,7 +306,7 @@ void download_to_dialog(App& a, const RemoteEntry& e) {
         return;
     }
     auto v = a.vault;
-    browse(a, BrowseMode::Save, "Download " + path_basename(e.logical), [&a, v, e](std::vector<std::string> paths) {
+    browse(a, BrowseMode::Save, trf("Download %s", path_basename(e.logical).c_str()), [&a, v, e](std::vector<std::string> paths) {
         std::string dest = paths[0];
         auto eng = a.engine;
         a.run_job([&a, v, eng, e, dest] {
@@ -313,7 +314,7 @@ void download_to_dialog(App& a, const RemoteEntry& e) {
             OpResult r = v->download_to(e.key, dest);
             eng->transfer_end(tid);
             eng->log(r.ok ? "downloaded " + e.logical + " → " + dest : "download failed: " + e.logical + " (" + r.error + ")");
-            a.post([&a, r, dest] { a.notify(r.ok ? "Saved " + dest : r.error, !r.ok); });
+            a.post([&a, r, dest] { a.notify(r.ok ? trf("Saved %s", dest.c_str()) : r.error, !r.ok); });
         });
     }, path_basename(e.logical));
 }

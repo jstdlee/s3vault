@@ -41,7 +41,7 @@ using namespace s3v;
 static ui::App* g_app = nullptr;
 
 // --script "step;step;…" drives the UI for screenshots and smoke tests without synthetic input:
-//   tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
+//   lang:<en|zh|ja|ko>  palette:<query>  locate:<setting>  tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
 //   conflicts:all  compare  edit:<path>  type:<text>  save  lock  form:<key>=<value>  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
 struct Script {
     std::vector<std::string> steps;
@@ -88,6 +88,17 @@ static std::string script_step(Script& s, ui::App& a) {
             else if (arg == "settings" || arg == "folders") ui::set_view(a, ui::View::Settings);
         } else if (cmd == "theme") {
             a.cfg.ui.theme = arg;
+        } else if (cmd == "lang") {
+            a.cfg.ui.language = arg;
+        } else if (cmd == "help") {  // help:<0 concepts|1 glossary|2 shortcuts>
+            ui::open_help(a, atoi(arg.c_str()));
+        } else if (cmd == "status") {  // status:<0 tasks|1 logs>
+            ui::open_status(a, atoi(arg.c_str()));
+        } else if (cmd == "palette") {  // palette:<query>
+            ui::open_palette(a, arg.c_str());
+        } else if (cmd == "locate") {  // locate:<English setting title>
+            ui::set_view(a, ui::View::Settings);
+            ui::prefs::locate(arg.c_str());
         } else if (cmd == "cd") {
             ui::navigate(a, arg);
         } else if (cmd == "expand") {
@@ -161,7 +172,9 @@ static std::string fc_match(const char* pattern) {
     std::string dir = (w && *w ? slashes(from_wide(w)) : std::string("C:/Windows")) + "/Fonts/";
     std::string pat = pattern;
     std::vector<const char*> files;
-    if (pat.find("lang=zh") != std::string::npos) files = {"msyh.ttc", "simsun.ttc", "YuGothR.ttc", "malgun.ttf"};
+    if (pat.find("lang=ja") != std::string::npos) files = {"YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"};
+    else if (pat.find("lang=ko") != std::string::npos) files = {"malgun.ttf", "gulim.ttc"};
+    else if (pat.find("lang=zh") != std::string::npos) files = {"msyh.ttc", "simsun.ttc"};
     else if (pat == "monospace") files = {"consola.ttf", "cour.ttf"};
     else files = {"segoeui.ttf", "arial.ttf"};
     for (const char* f : files)
@@ -195,6 +208,42 @@ static std::string icon_font_path() {
     return "";
 }
 
+// CJK text (file names, and the UI in 中文 / 日本語 / 한국어): the font for the UI language first, so its glyph
+// shapes are used, then the other two for anything it lacks (e.g. Hangul in a Chinese font on Windows).
+struct FontFace {
+    std::string file;
+    int index = 0;  // face inside a .ttc collection
+};
+
+#ifndef _WIN32
+static FontFace fc_face(const char* pattern) {
+    std::string out;
+    if (run_capture({"fc-match", "-f", "%{file}\n%{index}", pattern}, "", &out, nullptr, 4096, 3000) != 0) return {};
+    auto l = split(out, '\n');
+    if (l.empty() || !stat_path(trim(l[0]), true).is_file) return {};
+    return {trim(l[0]), l.size() > 1 ? atoi(l[1].c_str()) : 0};
+}
+#else
+static FontFace fc_face(const char* pattern) { return {fc_match(pattern), 0}; }
+#endif
+
+static std::vector<FontFace> cjk_fonts() {
+    std::vector<std::string> order;
+    switch (ui::language()) {
+        case ui::Lang::Ja: order = {"ja", "zh-cn", "ko"}; break;
+        case ui::Lang::Ko: order = {"ko", "zh-cn", "ja"}; break;
+        default: order = {"zh-cn", "ja", "ko"}; break;
+    }
+    std::vector<FontFace> out;
+    for (auto& l : order) {
+        FontFace f = fc_face(("sans-serif:lang=" + l).c_str());
+        bool dup = false;
+        for (auto& o : out) dup |= o.file == f.file && o.index == f.index;
+        if (!f.file.empty() && !dup) out.push_back(f);
+    }
+    return out;
+}
+
 static void build_fonts() {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
@@ -212,13 +261,15 @@ static void build_fonts() {
     cfg.OversampleH = 2;
     cfg.GlyphExcludeRanges = no_pua;
     if (base.empty() || !io.Fonts->AddFontFromFileTTF(base.c_str(), 0.0f, &cfg)) io.Fonts->AddFontDefault();
-    // CJK file names (merged; glyphs are loaded on demand by the dynamic font atlas).
-    std::string cjk = fc_match("sans-serif:lang=zh-cn");
-    if (!cjk.empty() && cjk != base) {
+    // CJK (merged; glyphs are loaded on demand by the dynamic font atlas).
+    std::vector<FontFace> cjk = cjk_fonts();
+    for (auto& f : cjk) {
+        if (f.file == base) continue;
         ImFontConfig m;
         m.MergeMode = true;
+        m.FontNo = f.index;
         m.GlyphExcludeRanges = no_pua;
-        io.Fonts->AddFontFromFileTTF(cjk.c_str(), 0.0f, &m);
+        io.Fonts->AddFontFromFileTTF(f.file.c_str(), 0.0f, &m);
     }
     std::string icons = icon_font_path();
     if (!icons.empty()) {
@@ -233,11 +284,13 @@ static void build_fonts() {
         ImFontConfig mc;
         mc.GlyphExcludeRanges = no_pua;
         ui::g_mono = io.Fonts->AddFontFromFileTTF(mono.c_str(), 0.0f, &mc);
-        if (ui::g_mono && !cjk.empty()) {
+        for (auto& f : cjk) {
+            if (!ui::g_mono) break;
             ImFontConfig m;
             m.MergeMode = true;
+            m.FontNo = f.index;
             m.GlyphExcludeRanges = no_pua;
-            io.Fonts->AddFontFromFileTTF(cjk.c_str(), 0.0f, &m);
+            io.Fonts->AddFontFromFileTTF(f.file.c_str(), 0.0f, &m);
         }
         if (ui::g_mono && !icons.empty()) {
             ImFontConfig m;
@@ -335,10 +388,13 @@ int main(int argc, char** argv) {
     // Script runs (tests, screenshots) use an invisible window so they never appear on — or take clicks from —
     // the user's desktop.
     if (!script.steps.empty()) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);  // no system title bar: s3vault draws its own (window_chrome.cpp)
+    glfwWindowHint(GLFW_MAXIMIZED, app.cfg.ui.maximized ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHintString(GLFW_X11_CLASS_NAME, "s3vault");
     glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "s3vault");
     app.win = glfwCreateWindow(std::max(720, app.cfg.ui.width), std::max(480, app.cfg.ui.height), "s3vault", nullptr, nullptr);
     if (!app.win) return 1;
+    glfwSetWindowSizeLimits(app.win, 720, 480, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(app.win);
     glfwSwapInterval(1);
 
@@ -360,7 +416,9 @@ int main(int argc, char** argv) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;  // layout is fixed; nothing about files is persisted by ImGui
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ui::set_language(app.cfg.ui.language);
     build_fonts();  // colours and metrics: ui::apply_theme(), applied by the first frame
+    ui::Lang font_lang = ui::language();
     ImGui_ImplGlfw_InitForOpenGL(app.win, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
@@ -372,8 +430,13 @@ int main(int argc, char** argv) {
     while (!glfwWindowShouldClose(app.win) && !app.quit_confirmed) {
         bool active = !script.steps.empty() || app.busy > 0 || (app.engine && (app.engine->syncing() || !app.engine->transfers().empty())) ||
                       app.preview.state == ui::PreviewState::Loading;
-        glfwWaitEventsTimeout(active ? 0.05 : 0.5);
+        if (ui::motion::animating()) glfwPollEvents();  // mid-animation: every frame (vsync paces it)
+        else glfwWaitEventsTimeout(active ? 0.05 : 0.5);
         ImGui::GetStyle().FontSizeBase = app.cfg.ui.font_size;
+        if (ui::language() != font_lang) {  // language switched in Settings: CJK glyph shapes follow it
+            font_lang = ui::language();
+            build_fonts();
+        }
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -414,7 +477,8 @@ int main(int argc, char** argv) {
     }
     if (!script.steps.empty())
         fprintf(stderr, "ui-thread: slowest frame %.1f ms, frames over 100 ms: %d\n", worst_frame * 1000, slow_frames);
-    glfwGetWindowSize(app.win, &app.cfg.ui.width, &app.cfg.ui.height);
+    app.cfg.ui.maximized = glfwGetWindowAttrib(app.win, GLFW_MAXIMIZED) == GLFW_TRUE;
+    if (!app.cfg.ui.maximized) glfwGetWindowSize(app.win, &app.cfg.ui.width, &app.cfg.ui.height);
     ui::app_shutdown(app);
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

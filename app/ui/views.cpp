@@ -89,11 +89,11 @@ void draw_conflicts_view(App& a) {
         for (auto* c : items) {
             bool on = a.conflict_sel.count(c->id) > 0;
             std::string name = path_basename(c->rel);
-            std::string desc = std::string(what_happened(c->kind)) + "  ·  here: " +
-                               (c->local_exists ? human_size(c->local_size) + ", " + format_local_time(c->local_mtime) : "deleted") +
-                               "  ·  server: " +
-                               (c->remote_exists ? human_size(c->remote_size) + ", " + format_local_time(c->remote_mtime) : "deleted");
-            float cw = ImGui::CalcTextSize("Compare").x + 28;
+            std::string desc = std::string(tr(what_happened(c->kind))) + "  ·  " + tr("here:") + " " +
+                               (c->local_exists ? human_size(c->local_size) + ", " + format_local_time(c->local_mtime) : std::string(tr("deleted"))) +
+                               "  ·  " + tr("server:") + " " +
+                               (c->remote_exists ? human_size(c->remote_size) + ", " + format_local_time(c->remote_mtime) : std::string(tr("deleted")));
+            float cw = ImGui::CalcTextSize(tr("Compare")).x + 28;
             ImVec2 row_top = ImGui::GetCursorScreenPos();
             std::string title_row = std::string("        ") + type_icon(name, false) + "  " + name;  // room for the checkbox
             prefs::row(title_row.c_str(), desc.c_str(), cw, [&] {
@@ -158,7 +158,7 @@ void draw_transfers_view(App& a) {
     auto ts = a.engine ? a.engine->transfers() : std::vector<Transfer>{};
     size_t queued = 0;
     for (auto& t : ts) queued += t.queued;
-    std::string sub = ts.empty() ? "" : std::to_string(ts.size() - queued) + " in progress · " + std::to_string(queued) + " waiting";
+    std::string sub = ts.empty() ? "" : trf("%d in progress · %d waiting", int(ts.size() - queued), int(queued));
     float top = page_header("Transfers", sub.c_str());
     body_begin(top);
     prefs::section("Now");
@@ -170,7 +170,7 @@ void draw_transfers_view(App& a) {
             if (t.queued != (pass == 1)) continue;
             if (++shown > 200) break;
             std::string name = path_basename(t.path);
-            std::string desc = (t.what == "upload" ? "Uploading to /" : t.what == "download" ? "Downloading /" : "Comparing /") + t.path;
+            std::string desc = trf(t.what == "upload" ? "Uploading to /%s" : t.what == "download" ? "Downloading /%s" : "Comparing /%s", t.path.c_str());
             float pw = 220;
             prefs::row(name.c_str(), desc.c_str(), pw, [&] {
                 if (t.queued) {
@@ -231,7 +231,7 @@ void draw_trash_view(App& a) {
             });
         });
     }
-    std::string sub = a.trash.empty() ? "" : std::to_string(a.trash.size()) + " items · kept " + std::to_string(a.cfg.sync.trash_days) + " days";
+    std::string sub = a.trash.empty() ? "" : tr_n(a.trash.size(), "%zu item", "%zu items") + " · " + trf("kept %d days", a.cfg.sync.trash_days);
     float top = page_header("Trash", sub.c_str());
     float W = ImGui::GetWindowWidth();
     ImGui::SetCursorPos(ImVec2(W - 20 - 130, (52 - ImGui::GetFrameHeight()) / 2));
@@ -255,7 +255,7 @@ void draw_trash_view(App& a) {
                     a.trash_sel.clear();
                     a.trash_dirty = true;
                     a.tree_dirty = true;
-                    a.notify("Put back " + plural(ok, "item"));
+                    a.notify(trf("Put back %s", tr_n(size_t(ok), "%zu item", "%zu items").c_str()));
                     if (a.engine) a.engine->request_sync();
                 });
             });
@@ -271,10 +271,10 @@ void draw_trash_view(App& a) {
         empty_state(ICON_FA_TRASH, "Trash Is Empty", "Deleted files stay here for a while so you can put them back.");
     } else if (ImGui::BeginTable("##t", 4, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_PadOuterX)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Original Location", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Date Deleted", ImGuiTableColumnFlags_WidthFixed, 140);
-        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80);
+        ImGui::TableSetupColumn(tr("Name"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Original Location"), ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(tr("Date Deleted"), ImGuiTableColumnFlags_WidthFixed, 140);
+        ImGui::TableSetupColumn(tr("Size"), ImGuiTableColumnFlags_WidthFixed, 80);
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
         for (int c = 0; c < 4; c++) {
             ImGui::TableSetColumnIndex(c);

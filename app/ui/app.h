@@ -17,6 +17,8 @@
 #include "index/db.h"
 #include "preview/preview.h"
 #include "sync/engine.h"
+#include "i18n.h"
+#include "motion.h"
 #include "theme.h"
 #include "vault/vault.h"
 
@@ -109,6 +111,8 @@ struct App {
     std::string cwd;                       // current vault folder ("" = root)
     std::vector<std::string> back, fwd;    // history
     float sidebar_w = 232, inspector_w = 330;
+    float chrome_right = 0;  // room kept free at the top right for the utility cluster and window buttons
+    bool sidebar_hidden = false;
     bool focus_search = false;
 
     // Tree (whole vault; the list shows the subtree of cwd)
@@ -199,6 +203,29 @@ void save_settings(App& a);    // persist a.cfg (and push live values into the r
 
 // screens.cpp — full-window states
 void draw_setup(App& a);
+// Frameless window: traffic lights, move, zoom, resize (window_chrome.cpp).
+void draw_window_chrome(App& a);
+void request_close(App& a);
+float window_buttons_width();
+// App shell (shell.cpp): utility cluster, status popover (tasks · logs), Help, keymap registry.
+struct Shortcut {
+    const char* keys;
+    const char* action;  // English; shown translated
+    const char* group;
+};
+const std::vector<Shortcut>& shortcuts();
+const char* shortcut_for(const char* action);
+float utility_cluster_width();
+void draw_utility_cluster(App& a);
+void toggle_status(App& a);
+void open_status(App& a, int tab);
+void draw_status_popover(App& a);
+void open_help(App& a, int tab = 0, const char* term = nullptr);
+void draw_help(App& a);
+std::vector<std::pair<const char*, const char*>> help_topics();  // glossary: term, definition
+// Feature search (Ctrl+P / Ctrl+K): find any view, action or setting by name (palette.cpp).
+void open_palette(App& a, const char* query = "");
+void draw_palette(App& a);
 void draw_lock_screen(App& a);
 
 // files_view.cpp

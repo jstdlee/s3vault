@@ -222,7 +222,7 @@ void preview_tick(App& a) {
     double idle = glfwGetTime() - std::max(p.last_used, a.last_input);
     if (idle > std::max(10, a.cfg.preview.idle_free_seconds)) {
         preview_free(a);
-        a.notify("Preview closed after inactivity");
+        a.notify(tr("Preview closed after inactivity"));
     }
 }
 
@@ -268,7 +268,7 @@ void draw_preview(App& a, const Node* sel, float height) {
             ImGui::SetCursorPos(ImVec2(12, 12));
             ImGui::PushTextWrapPos(w - 12);
             ImGui::TextColored(P.red, ICON_FA_CIRCLE_EXCLAMATION "  %s", p.error.c_str());
-            if (p.too_large) ImGui::TextDisabled("Use Download to save a copy where you choose.");
+            if (p.too_large) ImGui::TextDisabled("%s", tr("Use Download to save a copy where you choose."));
             ImGui::PopTextWrapPos();
             ImGui::EndChild();
             ImGui::PopStyleColor();

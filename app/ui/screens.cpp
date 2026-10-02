@@ -89,7 +89,7 @@ void draw_setup(App& a) {
         if (a.modal_busy) {
             spinner(8, P.dim);
             ImGui::SameLine();
-            ImGui::TextDisabled("Creating the vault…");
+            ImGui::TextDisabled("%s", tr("Creating the vault…"));
         } else {
             if (button("Create Vault", Btn::Primary, ImVec2(colw, 0), okpw && a.vault)) {
                 std::string pw = a.pw1;
@@ -145,7 +145,7 @@ void draw_setup(App& a) {
             ImGui::SetCursorPosX(colw / 2 - 60);
             spinner(8, P.dim);
             ImGui::SameLine();
-            ImGui::TextDisabled("Connecting…");
+            ImGui::TextDisabled("%s", tr("Connecting…"));
         } else {
             const StorageConfig& s = a.form.storage;
             bool complete = !s.bucket.empty() && !s.access_key_id.empty() && (s.provider != "r2" || !s.account_id.empty()) &&
@@ -177,7 +177,7 @@ void draw_lock_screen(App& a) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 7));
     ImGui::SetNextItemWidth(colw);
     if (!a.lock_busy && !ImGui::IsAnyItemActive() && a.modal.empty()) ImGui::SetKeyboardFocusHere();
-    bool enter = ImGui::InputTextWithHint("##pw", "Vault password", a.lock_pw, sizeof a.lock_pw,
+    bool enter = ImGui::InputTextWithHint("##pw", tr("Vault password"), a.lock_pw, sizeof a.lock_pw,
                                           ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::PopStyleVar(2);
     ImGui::Dummy(ImVec2(0, 4));
@@ -217,9 +217,9 @@ void draw_lock_screen(App& a) {
         std::string s;
         ImVec4 c = P.dim;
         size_t nx = a.engine ? a.engine->transfers().size() : 0;
-        if (need_key) s = ICON_FA_PAUSE "  Encrypted files wait until you unlock";
-        else if (a.engine && a.engine->syncing()) { s = ICON_FA_ROTATE "  Syncing in the background" + (nx ? " · " + std::to_string(nx) + " files" : std::string()); c = P.green; }
-        else if (a.engine && a.engine->last_sync()) s = ICON_FA_CIRCLE_CHECK "  Sync keeps running · checked " + format_local_time(a.engine->last_sync()).substr(11);
+        if (need_key) s = std::string(ICON_FA_PAUSE "  ") + tr("Encrypted files wait until you unlock");
+        else if (a.engine && a.engine->syncing()) { s = std::string(ICON_FA_ROTATE "  ") + tr("Syncing in the background") + (nx ? " · " + tr_n(nx, "%zu file", "%zu files") : std::string()); c = P.green; }
+        else if (a.engine && a.engine->last_sync()) s = std::string(ICON_FA_CIRCLE_CHECK "  ") + trf("Sync keeps running · checked %s", format_local_time(a.engine->last_sync()).substr(11).c_str());
         float tw = ImGui::CalcTextSize(s.c_str()).x;
         ImGui::SetCursorPosX(std::max(0.0f, (colw - tw) / 2));
         ImGui::TextColored(c, "%s", s.c_str());

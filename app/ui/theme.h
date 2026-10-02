@@ -26,10 +26,11 @@ struct Palette {
     bool dark = false;
 };
 extern Palette P;
-extern ImFont* g_mono;  // monospaced font for code, text preview, editor (may be null → default)
+extern ImFont* g_mono;
+extern float g_title_inset;  // page headers start this far right (room for the window buttons)  // monospaced font for code, text preview, editor (may be null → default)
 
 bool system_prefers_dark();
-void apply_theme(bool dark);
+void apply_theme(int theme);  // 0 light, 1 dark, 2 Tokyo Night
 ImU32 col(const ImVec4& c, float alpha = 1.0f);
 
 // ---- small widgets -------------------------------------------------------------------------------
@@ -47,6 +48,8 @@ void status_text(const ImVec4& c, const char* text);
 // Keyboard focus ring (3 px, accent at 50 %) around the last item, for custom-drawn controls.
 void focus_ring(float rounding = 6.0f);
 void badge(const std::string& text, const ImVec4& bg, const ImVec4& fg);
+// Keyboard shortcut as key chips: "Ctrl+Shift+T" → [Ctrl][Shift][T]; " / " separates alternatives.
+void key_chips(const char* keys);
 bool search_field(const char* id, char* buf, size_t n, float width, const char* hint = "Search");
 void spinner(float radius, const ImVec4& c);
 void empty_state(const char* icon, const char* title, const char* line);
@@ -79,6 +82,8 @@ bool sheet_field(const char* label, char* buf, size_t n, const char* hint = "", 
 // ---- preference rows (cards) ---------------------------------------------------------------------
 namespace prefs {
 extern bool g_dirty;
+// Scroll the row with this (English) title into view on the next Settings frame and highlight it briefly.
+void locate(const char* title);
 void page_begin(float max_width = 760);
 void page_end();
 // `caps` false for data such as folder paths, which must keep their case.

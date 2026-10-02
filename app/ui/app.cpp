@@ -139,8 +139,10 @@ void app_init(App& a) {
     std::string err;
     if (!a.db.open(data_dir() + "/index.db", &err)) a.notify("Index error: " + err, true);
     a.form = a.cfg;
+    a.sidebar_w = std::clamp(a.cfg.ui.sidebar_w, 180.0f, 360.0f);
+    a.inspector_w = std::clamp(a.cfg.ui.inspector_w, 260.0f, 640.0f);
     int n = platform::cleanup_stale_tmp();
-    if (n) a.notify("Removed " + plural(n, "leftover temporary folder") + " from a previous session");
+    if (n) a.notify(trf("Removed %s from a previous session", tr_n(size_t(n), "%zu leftover temporary folder", "%zu leftover temporary folders").c_str()));
     connect_async(a);
 }
 
@@ -164,7 +166,7 @@ void forget_key(App& a) {
     a.browse_locked = true;  // stay in the window, with the "locked" banner
     preview_free(a);
     a.tree_dirty = true;
-    a.notify("Key forgotten — encrypted files won't sync until you unlock");
+    a.notify(tr("Key forgotten — encrypted files won't sync until you unlock"));
 }
 
 bool key_needed(App& a) { return a.conn == App::Conn::Ready && a.vault_has_key && a.vault && !a.vault->unlocked(); }
@@ -326,7 +328,7 @@ static std::map<std::string, std::string> compute_status(Db& db, const std::vect
 static void mark_tracked(Node* n, const std::vector<RootRow>& roots) {
     for (auto& r : roots) {
         std::string p = r.remote_prefix;
-        std::string info = display_path(r.local_path) + " · " + r.direction + (r.paused ? " · paused" : "");
+        std::string info = display_path(r.local_path) + " · " + tr(r.direction == "upload-only" ? "Back up only" : r.direction == "download-only" ? "Mirror only" : "Both ways") + (r.paused ? std::string(" · ") + tr("Paused") : std::string());
         if (!n->logical.empty() && n->logical == p) { n->tracked_root = n->tracked = true; n->tracked_info = info; }
         else if (p.empty() ? !n->logical.empty() : starts_with(n->logical, p + "/")) { n->tracked = true; n->tracked_info = info; }
     }
@@ -409,8 +411,13 @@ const Node* find_node(const Node* n, const std::string& logical) {
 // ---------------------------------------------------------------------------
 // sidebar
 
+// The selected row's rectangle, relative to the list window; the highlight is drawn once, behind the rows, and
+// slides there (spatial consistency when switching views; 160 ms ease-in-out, instant under reduced motion).
+static bool g_side_sel = false;
+static ImVec2 g_side_sel_pos, g_side_sel_size;
+
 static bool side_item(const char* icon, const ImVec4& icon_col, const char* label, bool selected, const std::string& badge_text = "",
-                      const ImVec4* badge_col = nullptr, const ImVec4* dot = nullptr) {
+                      const ImVec4* badge_col = nullptr, const ImVec4* dot = nullptr, bool translate = true) {
     float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight() + 4;
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::PushID(label);
@@ -420,8 +427,13 @@ static bool side_item(const char* icon, const ImVec4& icon_col, const char* labe
     ImGui::PopID();
     bool hov = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    if (selected) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.dark ? ImVec4(1, 1, 1, 0.09f) : ImVec4(0, 0, 0, 0.07f)), 7);
-    else if (hov) dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.hover), 7);
+    if (selected) {
+        g_side_sel = true;
+        g_side_sel_pos = ImVec2(p.x - ImGui::GetWindowPos().x, p.y - ImGui::GetWindowPos().y);
+        g_side_sel_size = ImVec2(w, h);
+    } else if (hov) {
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.hover), 7);
+    }
     float ty = p.y + (h - ImGui::GetTextLineHeight()) / 2;
     ImVec2 is = ImGui::CalcTextSize(icon);
     dl->AddText(ImVec2(p.x + 10 + (18 - is.x) / 2, ty), col(icon_col), icon);
@@ -440,7 +452,8 @@ static bool side_item(const char* icon, const ImVec4& icon_col, const char* labe
         dl->AddCircleFilled(ImVec2(right - 4, p.y + h / 2), 4, col(*dot), 12);
         right -= 14;
     }
-    // Label, cut with an ellipsis if needed.
+    // Label, cut with an ellipsis if needed. (Folder names are the user's and are never translated.)
+    if (translate) label = tr(label);
     std::string l = label;
     float maxw = right - (p.x + 36);
     if (ImGui::CalcTextSize(l.c_str()).x > maxw) {
@@ -460,7 +473,7 @@ static void side_section(const char* title) {
     ImGui::Dummy(ImVec2(0, 8));
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10);
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.78f);
-    ImGui::TextColored(P.dim, "%s", title);
+    ImGui::TextColored(P.dim, "%s", tr(title));
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 1));
 }
@@ -480,12 +493,16 @@ static void sidebar(App& a, float w, float h) {
     ImGui::SameLine(0, 8);
     title_text("s3vault", 1.12f);
     ImGui::SetCursorPosX(16);
-    small_dim("%s", a.cfg.storage.bucket.empty() ? "not connected" : a.cfg.storage.bucket.c_str());
+    small_dim("%s", a.cfg.storage.bucket.empty() ? tr("Not connected") : a.cfg.storage.bucket.c_str());
     ImGui::Dummy(ImVec2(0, 4));
 
     ImGui::SetCursorPosX(8);
     ImGui::BeginChild("##sidelist", ImVec2(w - 16, h - ImGui::GetCursorPosY() - footer_h), ImGuiChildFlags_None, ImGuiWindowFlags_None);
     bool files = a.view == View::Files;
+    ImDrawList* ldl = ImGui::GetWindowDrawList();
+    ldl->ChannelsSplit(2);
+    ldl->ChannelsSetCurrent(1);
+    g_side_sel = false;
     side_section("Vault");
     if (side_item(ICON_FA_HARD_DRIVE, P.accent, "All Files", files && a.cwd.empty())) navigate(a, "");
     if (side_item(ICON_FA_TRASH, P.dim, "Trash", a.view == View::Trash)) set_view(a, View::Trash);
@@ -501,21 +518,21 @@ static void sidebar(App& a, float w, float h) {
         std::string label = path_basename(r.local_path);
         bool sel = files && !a.cwd.empty() && (a.cwd == r.remote_prefix || starts_with(a.cwd, r.remote_prefix + "/"));
         ImGui::PushID(r.id);
-        if (side_item(ICON_FA_FOLDER, P.folder, label.c_str(), sel, "", nullptr, &dotc)) navigate(a, r.remote_prefix);
+        if (side_item(ICON_FA_FOLDER, P.folder, label.c_str(), sel, "", nullptr, &dotc, false)) navigate(a, r.remote_prefix);
         std::string t = display_path(r.local_path) + "  ↔  /" + r.remote_prefix + "\n" +
-                        (r.paused ? "Paused" : missing ? "Folder missing on this computer" : nconf ? plural(nconf, "conflict") : "In sync");
+                        (r.paused ? tr("Paused") : missing ? tr("Folder missing on this computer") : nconf ? tr_n(nconf, "%zu conflict", "%zu conflicts") : tr("In sync"));
         tip(t);
         if (ImGui::BeginPopupContextItem("##rootmenu")) {
-            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "   Show in Vault")) navigate(a, r.remote_prefix);
+            if (ImGui::MenuItem(tr(ICON_FA_FOLDER_OPEN "   Show in Vault"))) navigate(a, r.remote_prefix);
             RootRow rr = r;
             if (ImGui::MenuItem(r.paused ? ICON_FA_PLAY "   Resume Syncing" : ICON_FA_PAUSE "   Pause Syncing")) {
                 rr.paused = !rr.paused;
                 a.db.update_root(rr);
                 if (a.engine) a.engine->request_sync();
             }
-            if (ImGui::MenuItem(ICON_FA_GEAR "   Sync Settings…")) set_view(a, View::Settings);
+            if (ImGui::MenuItem(tr(ICON_FA_GEAR "   Sync Settings…"))) set_view(a, View::Settings);
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_FA_LINK_SLASH "   Stop Syncing…")) {
+            if (ImGui::MenuItem(tr(ICON_FA_LINK_SLASH "   Stop Syncing…"))) {
                 a.modal_arg = std::to_string(r.id);
                 a.modal = "remove-root";
             }
@@ -523,7 +540,23 @@ static void sidebar(App& a, float w, float h) {
         }
         ImGui::PopID();
     }
-    if (side_item(ICON_FA_PLUS, P.dim, "Add Folder…", false)) add_tracked_folder(a);
+    // Feature highlight (polish-app §9): the one thing s3vault is for, in the same place in every view.
+    {
+        float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFrameHeight() + 6;
+        ImGui::Dummy(ImVec2(0, 2));
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        bool click = ImGui::InvisibleButton("##feature", ImVec2(w, h));
+        focus_ring(7.0f);
+        bool hov = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col(P.accent, held ? 0.22f : hov ? 0.17f : 0.12f), 7);
+        dl->AddRect(p, ImVec2(p.x + w, p.y + h), col(P.accent, 0.35f), 7);
+        float ty = p.y + (h - ImGui::GetTextLineHeight()) / 2;
+        dl->AddText(ImVec2(p.x + 12, ty), col(P.accent), ICON_FA_WAND_MAGIC_SPARKLES);
+        dl->AddText(ImVec2(p.x + 36, ty), col(P.accent), tr("Sync a folder"));
+        tip(std::string(tr("Keep a folder on this computer in sync with the vault, encrypted")) + "  (Ctrl+Shift+A)");
+        if (click) add_tracked_folder(a);
+    }
 
     side_section("Activity");
     auto ts = a.engine ? a.engine->transfers() : std::vector<Transfer>{};
@@ -536,6 +569,21 @@ static void sidebar(App& a, float w, float h) {
     bool dirty = a.edits && a.edits->any_dirty();
     if (ndocs && side_item(ICON_FA_PEN_TO_SQUARE, P.dim, "Editor", a.view == View::Editor, std::to_string(ndocs), dirty ? &P.orange : &P.grey))
         set_view(a, View::Editor);
+    {
+        ldl->ChannelsSetCurrent(0);
+        static float last_y = 0, last_al = 0;
+        if (g_side_sel) last_y = g_side_sel_pos.y;
+        // Appearing from nothing (e.g. coming back from Settings) fades in place instead of sliding from an old row.
+        float y = motion::tween(ImGui::GetID("##selpill_y"), last_y, motion::kFast, motion::ease_in_out, last_al < 0.02f);
+        float al = motion::tween(ImGui::GetID("##selpill_a"), g_side_sel ? 1.0f : 0.0f, motion::kFast, motion::ease_out);
+        last_al = al;
+        if (al > 0.01f) {
+            ImVec2 wp = ImGui::GetWindowPos();
+            ImVec2 a0(wp.x + g_side_sel_pos.x, wp.y + y), a1(a0.x + g_side_sel_size.x, a0.y + g_side_sel_size.y);
+            ldl->AddRectFilled(a0, a1, col(P.dark ? ImVec4(1, 1, 1, 0.09f) : ImVec4(0, 0, 0, 0.07f), al), 7);
+        }
+        ldl->ChannelsMerge();
+    }
     ImGui::EndChild();
 
     // Footer: sync status, lock, settings
@@ -553,14 +601,14 @@ static void sidebar(App& a, float w, float h) {
         else if (a.conn == C::Error) { line1 = "Can't reach storage"; line2 = "Open Settings for details"; c = P.red; icon = ICON_FA_CIRCLE_EXCLAMATION; }
         else if (a.conn != C::Ready) { line1 = "Not connected"; icon = ICON_FA_CLOUD; }
         else if (key_needed(a)) { line1 = "Locked"; line2 = "Encrypted files are paused"; c = P.orange; icon = ICON_FA_LOCK; }
-        else if (nx || (a.engine && a.engine->syncing())) { line1 = nx ? "Syncing " + plural(nx, "file") : "Checking for changes"; c = P.accent; icon = ICON_FA_ROTATE; }
-        else if (!conflicts.empty()) { line1 = "Needs your attention"; line2 = plural(conflicts.size(), "conflict") + " to review"; c = P.orange; icon = ICON_FA_TRIANGLE_EXCLAMATION; }
+        else if (nx || (a.engine && a.engine->syncing())) { line1 = nx ? trf("Syncing %s", tr_n(nx, "%zu file", "%zu files").c_str()) : "Checking for changes"; c = P.accent; icon = ICON_FA_ROTATE; }
+        else if (!conflicts.empty()) { line1 = "Needs your attention"; line2 = tr_n(conflicts.size(), "%zu conflict to review", "%zu conflicts to review"); c = P.orange; icon = ICON_FA_TRIANGLE_EXCLAMATION; }
         else { line1 = "Up to date"; c = P.green; }
-        if (line2.empty() && a.engine && a.engine->last_sync()) line2 = "Checked " + format_local_time(a.engine->last_sync()).substr(11);
+        if (line2.empty() && a.engine && a.engine->last_sync()) line2 = trf("Checked %s", format_local_time(a.engine->last_sync()).substr(11).c_str());
         ImGui::TextColored(c, "%s", icon);
         ImGui::SameLine(0, 8);
         ImGui::BeginGroup();
-        ImGui::TextUnformatted(line1.c_str());
+        ImGui::TextUnformatted(tr(line1));
         if (!line2.empty()) small_dim("%s", line2.c_str());
         ImGui::EndGroup();
     }
@@ -572,8 +620,7 @@ static void sidebar(App& a, float w, float h) {
         if (a.engine) a.engine->request_sync();
         refresh_listing(a);
     }
-    ImGui::SameLine(0, 2);
-    if (icon_button(ICON_FA_GEAR, "Settings", a.view == View::Settings)) set_view(a, View::Settings);
+
     ImGui::EndChild();
 }
 
@@ -583,8 +630,14 @@ static void sidebar(App& a, float w, float h) {
 static void toast(App& a) {
     if (a.toast.text.empty() || glfwGetTime() > a.toast.until) return;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    float alpha = std::min(1.0f, float(a.toast.until - glfwGetTime()) * 3.0f);
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x / 2 + a.sidebar_w / 2, vp->WorkPos.y + vp->WorkSize.y - 24), 0, ImVec2(0.5f, 1));
+    // Enters rising and fading in, leaves the same way it came (200 ms ease-out); reduced motion keeps the fade only.
+    float in = motion::appear(0x7057u, motion::kSheet);
+    float left = float(a.toast.until - glfwGetTime());
+    float out = motion::ease_out(std::clamp(left / motion::kSheet, 0.0f, 1.0f));
+    if (left < motion::kSheet) motion::keep_alive();
+    float alpha = std::min(in, out);
+    float dy = motion::move(10) * (1 - alpha);
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x / 2 + a.sidebar_w / 2, vp->WorkPos.y + vp->WorkSize.y - 24 + dy), 0, ImVec2(0.5f, 1));
     ImGui::SetNextWindowBgAlpha(0.96f * alpha);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 10));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 20);
@@ -598,7 +651,7 @@ static void toast(App& a) {
     else ImGui::TextColored(P.green, ICON_FA_CIRCLE_CHECK);
     ImGui::SameLine(0, 8);
     ImGui::PushTextWrapPos(560);
-    ImGui::TextUnformatted(a.toast.text.c_str());
+    ImGui::TextUnformatted(tr(a.toast.text));
     ImGui::PopTextWrapPos();
     ImGui::End();
     ImGui::PopStyleColor();
@@ -610,6 +663,11 @@ static bool setup_needed(App& a);
 
 static void global_shortcuts(App& a, bool locked) {
     ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) open_help(a, 0);
+    if (ImGui::IsKeyPressed(ImGuiKey_F11, false)) {
+        if (glfwGetWindowAttrib(a.win, GLFW_MAXIMIZED)) glfwRestoreWindow(a.win);
+        else glfwMaximizeWindow(a.win);
+    }
     if (!io.KeyCtrl || io.KeyAlt) return;
     static const float sizes[] = {13.5f, 15.0f, 17.25f, 19.5f};
     int cur = 1;
@@ -624,6 +682,22 @@ static void global_shortcuts(App& a, bool locked) {
         save_settings(a);
     }
     if (!locked && a.modal.empty() && ImGui::IsKeyPressed(ImGuiKey_Comma, false) && !setup_needed(a)) set_view(a, View::Settings);
+    bool free = !locked && a.modal.empty() && !setup_needed(a);
+    if (free && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_P, false) || ImGui::IsKeyPressed(ImGuiKey_K, false))) open_palette(a);
+    if (free && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_P, false)) open_palette(a);
+    if (ImGui::IsKeyPressed(ImGuiKey_Slash, false)) open_help(a, 2);
+    if (ImGui::IsKeyPressed(ImGuiKey_J, false)) toggle_status(a);
+    if (free && ImGui::IsKeyPressed(ImGuiKey_B, false)) a.sidebar_hidden = !a.sidebar_hidden;
+    if (free && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_A, false)) add_tracked_folder(a);
+    if (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+        static const char* order[] = {"system", "light", "dark", "tokyo"};
+        int i = 0;
+        for (int k = 0; k < 4; k++)
+            if (a.cfg.ui.theme == order[k]) i = k;
+        a.cfg.ui.theme = order[(i + 1) % 4];
+        save_settings(a);
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) request_close(a);
 }
 
 static bool setup_needed(App& a) {
@@ -636,15 +710,18 @@ static bool setup_needed(App& a) {
 }
 
 void app_frame(App& a) {
+    motion::frame_begin();
+    motion::configure(a.cfg.ui.motion.c_str());
+    set_language(a.cfg.ui.language);
     a.drain_ui_queue();
     if (a.tree_dirty && a.conn == App::Conn::Ready) rebuild_tree(a);
 
     // Theme: follow the setting (system = the desktop's light/dark preference, read at start).
     static int applied = -1;
     static bool sys_dark = system_prefers_dark();
-    int want = a.cfg.ui.theme == "dark" ? 1 : a.cfg.ui.theme == "light" ? 0 : (sys_dark ? 1 : 0);
+    int want = a.cfg.ui.theme == "tokyo" ? 2 : a.cfg.ui.theme == "dark" ? 1 : a.cfg.ui.theme == "light" ? 0 : (sys_dark ? 1 : 0);
     if (want != applied) {
-        apply_theme(want == 1);
+        apply_theme(want);
         applied = want;
     }
 
@@ -661,6 +738,7 @@ void app_frame(App& a) {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     float W = vp->WorkSize.x, H = vp->WorkSize.y;
+    a.chrome_right = window_buttons_width() + utility_cluster_width();
 
     bool locked_screen = a.ui_locked || (key_needed(a) && !a.browse_locked);
     if (locked_screen) {
@@ -668,10 +746,27 @@ void app_frame(App& a) {
     } else if (setup_needed(a)) {
         draw_setup(a);
     } else {
-        float sw = W < 760 ? 0 : a.sidebar_w;
+        float sw = W < 760 || a.sidebar_hidden ? 0 : a.sidebar_w;
+
         if (sw > 0) {
             ImGui::SetCursorPos(ImVec2(0, 0));
             sidebar(a, sw, H);
+        }
+        if (sw > 0) {  // splitter: drag to resize, double-click to reset; the width is remembered
+            ImGui::SetCursorPos(ImVec2(sw - 3, 0));
+            ImGui::InvisibleButton("##sidesplit", ImVec2(6, H));
+            bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+            if (hot) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                ImVec2 wp = ImGui::GetWindowPos();
+                ImGui::GetForegroundDrawList()->AddLine(ImVec2(wp.x + sw - 1, wp.y), ImVec2(wp.x + sw - 1, wp.y + H), col(P.accent), 2);
+            }
+            if (ImGui::IsItemActive()) a.sidebar_w = std::clamp(a.sidebar_w + ImGui::GetIO().MouseDelta.x, 180.0f, 360.0f);
+            if (ImGui::IsItemDeactivated() || (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))) {
+                if (ImGui::IsMouseDoubleClicked(0)) a.sidebar_w = 232;
+                a.cfg.ui.sidebar_w = a.sidebar_w;
+                save_settings(a);
+            }
         }
         ImGui::SetCursorPos(ImVec2(sw, 0));
         ImGui::BeginChild("##content", ImVec2(W - sw, H), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -685,9 +780,14 @@ void app_frame(App& a) {
         }
         ImGui::EndChild();
     }
+    draw_window_chrome(a);
     ImGui::End();
 
+    draw_utility_cluster(a);
     draw_modals(a);
+    draw_palette(a);
+    draw_status_popover(a);
+    draw_help(a);
     draw_file_browser(a);
     toast(a);
     global_shortcuts(a, locked_screen);

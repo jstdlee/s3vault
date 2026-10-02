@@ -28,7 +28,7 @@ static void save_doc(App& a, int id, bool force) {
         a.post([&a, em, id, r] {
             EditDoc* d = em->doc(id);
             if (r.ok) {
-                a.notify("Saved to the vault");
+                a.notify(tr("Saved to the vault"));
                 a.tree_dirty = true;
                 if (a.engine) a.engine->request_sync();
             } else if (r.precondition_failed) {
@@ -56,7 +56,7 @@ static void reload_doc(App& a, int id) {
                 em->apply_saved(id, text, etag);
             }
             wipe(text);
-            a.notify("Reloaded the server version");
+            a.notify(tr("Reloaded the server version"));
         });
     });
 }
@@ -109,7 +109,7 @@ void draw_edits_tab(App& a) {
             ImGui::AlignTextToFramePadding();
             status_text(d->dirty() ? P.orange : P.green, d->dirty() ? "Edited" : "Saved");
             ImGui::SameLine(0, 12);
-            small_dim("/%s%s · %zu lines · %s", d->logical.c_str(), ends_with(d->key, ".gpg") ? " · encrypted" : "", lines, human_size(d->text.size()).c_str());
+            small_dim("/%s%s · %zu lines · %s", d->logical.c_str(), ends_with(d->key, ".gpg") ? (std::string(" · ") + tr("encrypted")).c_str() : "", lines, human_size(d->text.size()).c_str());
             if (!d->error.empty()) ImGui::TextColored(P.red, "%s", d->error.c_str());
             if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S) && d->dirty()) save = true;
             ImGui::Dummy(ImVec2(0, 2));
@@ -132,7 +132,7 @@ void draw_edits_tab(App& a) {
     // Sheets for this view
     if (sheet_begin(a.modal, "edit-close", 420)) {
         EditDoc* d = em->doc(a.edit_close_id);
-        std::string t = "Save Changes to \"" + (d ? path_basename(d->logical) : std::string("the file")) + "\"?";
+        std::string t = d ? trf("Save Changes to \"%s\"?", path_basename(d->logical).c_str()) : std::string(tr("Save Changes?"));
         sheet_title(ICON_FA_PEN_TO_SQUARE, P.orange, t.c_str(), "Your changes will be lost if you don't save them.");
         int id = a.edit_close_id;
         int extra = 0;
@@ -144,7 +144,7 @@ void draw_edits_tab(App& a) {
     }
     if (sheet_begin(a.modal, "edit-conflict", 480)) {
         EditDoc* d = em->doc(a.edit_close_id);
-        std::string sub = (d ? "/" + d->logical : std::string("The file")) + " was changed on another device since you opened it.";
+        std::string sub = trf("%s was changed on another device since you opened it.", d ? ("/" + d->logical).c_str() : tr("The file"));
         sheet_title(ICON_FA_CODE_MERGE, P.orange, "Someone Else Changed This File", sub.c_str());
         int id = a.edit_close_id;
         int extra = 0;
@@ -156,7 +156,7 @@ void draw_edits_tab(App& a) {
                 OpResult x = em->save_as_copy(id, text);
                 wipe(text);
                 a.post([&a, em, id, x] {
-                    if (x.ok) { em->close(id); a.notify("Saved your version as a copy"); a.tree_dirty = true; }
+                    if (x.ok) { em->close(id); a.notify(tr("Saved your version as a copy")); a.tree_dirty = true; }
                     else a.notify(x.error, true);
                 });
             });
