@@ -40,7 +40,12 @@ bool icon_button(const char* icon, const char* tip, bool on = false, bool enable
 void tip(const std::string& text);
 void title_text(const char* text, float scale = 1.25f);  // larger heading (no bold: size, not weight)
 void small_dim(const char* fmt, ...);
-void status_dot(const ImVec4& c, float r = 4.0f);
+// `dy`: extra vertical offset, e.g. FramePadding.y after AlignTextToFramePadding().
+void status_dot(const ImVec4& c, float r = 4.0f, float dy = 0.0f);
+// A status value: coloured dot + text in the normal text colour (coloured text is too faint on white for AA).
+void status_text(const ImVec4& c, const char* text);
+// Keyboard focus ring (3 px, accent at 50 %) around the last item, for custom-drawn controls.
+void focus_ring(float rounding = 6.0f);
 void badge(const std::string& text, const ImVec4& bg, const ImVec4& fg);
 bool search_field(const char* id, char* buf, size_t n, float width, const char* hint = "Search");
 void spinner(float radius, const ImVec4& c);
@@ -76,7 +81,8 @@ namespace prefs {
 extern bool g_dirty;
 void page_begin(float max_width = 760);
 void page_end();
-void section(const char* title);
+// `caps` false for data such as folder paths, which must keep their case.
+void section(const char* title, bool caps = true);
 void card_begin();
 void card_end();
 // A row with a title/description on the left; the callback draws the control (right-aligned, width w).

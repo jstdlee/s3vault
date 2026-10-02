@@ -94,27 +94,39 @@ static void toolbar(App& a) {
     ImGui::SameLine(0, 10);
     // Breadcrumb: All Files › Documents › photos
     std::vector<std::string> parts = a.cwd.empty() ? std::vector<std::string>{} : split(a.cwd, '/');
-    float y = ImGui::GetCursorPosY();
-    ImGui::SetCursorPosY(y + (30 - ImGui::GetTextLineHeight()) / 2);
+    // Every crumb and chevron is centred on the toolbar's midline (they differ in size).
+    float mid = ImGui::GetCursorPosY() + 15;
     auto crumb = [&](const std::string& label, const std::string& path, bool last) {
         ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * (last ? 1.12f : 1.0f));
         ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        ImGui::SetCursorPosY(mid - ts.y / 2);
         ImVec2 p = ImGui::GetCursorScreenPos();
         ImGui::PushID(path.c_str());
         bool click = ImGui::InvisibleButton("##crumb", ts);
         ImGui::PopID();
-        bool hov = ImGui::IsItemHovered();
-        ImGui::GetWindowDrawList()->AddText(p, col(last ? P.text : hov ? P.text : P.dim), label.c_str());
+        bool hov = ImGui::IsItemHovered() && !last;
+        ImGui::GetWindowDrawList()->AddText(p, col(last || hov ? P.text : P.dim), label.c_str());
         ImGui::PopFont();
+        if (!last) tip("Go to " + label);
         if (click && !last) navigate(a, path);
+    };
+    auto chevron = [&] {
+        float sz = ImGui::GetStyle().FontSizeBase * 0.72f;
+        ImGui::PushFont(nullptr, sz);
+        ImVec2 ts = ImGui::CalcTextSize(ICON_FA_CHEVRON_RIGHT);
+        ImGui::PopFont();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float y = ImGui::GetWindowPos().y - ImGui::GetScrollY() + mid - ts.y / 2;
+        ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), sz, ImVec2(p.x, y), col(P.dim, 0.7f), ICON_FA_CHEVRON_RIGHT);
+        ImGui::Dummy(ImVec2(ts.x, 1));
     };
     crumb("All Files", "", parts.empty());
     std::string acc;
     for (size_t i = 0; i < parts.size(); i++) {
         acc = acc.empty() ? parts[i] : acc + "/" + parts[i];
-        ImGui::SameLine(0, 7);
-        ImGui::TextColored(P.faint, ICON_FA_CHEVRON_RIGHT);
-        ImGui::SameLine(0, 7);
+        ImGui::SameLine(0, 8);
+        chevron();
+        ImGui::SameLine(0, 8);
         crumb(parts[i], acc, i + 1 == parts.size());
     }
 
@@ -232,12 +244,12 @@ static void draw_rows(App& a, const Node& n, int depth) {
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
         if (k.dir && k.tracked_root) {
-            status_dot(P.green);
+            status_dot(P.green, 3.5f, ImGui::GetStyle().FramePadding.y);
             ImGui::SameLine(0, 6);
             ImGui::TextDisabled("Synced folder");
             tip("Kept in sync with " + k.tracked_info);
         } else if (!k.dir && !k.status.empty()) {
-            status_dot(status_color(k.status));
+            status_dot(status_color(k.status), 3.5f, ImGui::GetStyle().FramePadding.y);
             ImGui::SameLine(0, 6);
             ImGui::TextDisabled("%s", k.status.c_str());
             tip(status_help(k.status));
@@ -372,7 +384,7 @@ static void kv(const char* k, const std::string& v, const ImVec4* c = nullptr) {
     ImGui::TextDisabled("%s", k);
     ImGui::TableNextColumn();
     ImGui::PushTextWrapPos(0.0f);
-    if (c) ImGui::TextColored(*c, "%s", v.c_str());
+    if (c) status_text(*c, v.c_str());
     else ImGui::TextUnformatted(v.c_str());
     ImGui::PopTextWrapPos();
 }
@@ -498,9 +510,13 @@ static void inspector(App& a, float width, float height) {
 
         // Info
         small_dim("INFORMATION");
-        ImGui::Separator();
-        if (ImGui::BeginTable("##info", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, 92);
+        {  // hairline the width of the column (Separator would run to the window edge)
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddLine(p, ImVec2(p.x + inner, p.y), col(P.divider));
+            ImGui::Dummy(ImVec2(inner, 3));
+        }
+        if (ImGui::BeginTable("##info", 2, ImGuiTableFlags_SizingStretchProp, ImVec2(inner, 0))) {
+            ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Synced with").x + 18);
             ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
             kv("Kind", n->dir ? "Folder" : file_type_label(n->name));
             kv("Size", human_size(n->size) + (n->dir || !n->entry.encrypted ? "" : " (encrypted)"));

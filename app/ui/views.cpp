@@ -84,7 +84,7 @@ void draw_conflicts_view(App& a) {
         groups[d.empty() ? rp : rp + "/" + d].push_back(&c);
     }
     for (auto& [title, items] : groups) {
-        prefs::section(title.c_str());
+        prefs::section(title.c_str(), false);
         prefs::card_begin();
         for (auto* c : items) {
             bool on = a.conflict_sel.count(c->id) > 0;
@@ -180,7 +180,8 @@ void draw_transfers_view(App& a) {
                     float f = t.total ? float(double(t.done) / double(t.total)) : 0.0f;
                     ImGui::BeginGroup();
                     progress(f, pw, 5);
-                    small_dim("%s of %s", human_size(t.done).c_str(), human_size(t.total).c_str());
+                    if (t.total && t.done >= t.total) small_dim("Finishing…");  // bytes sent; waiting for the server to confirm
+                    else small_dim("%s of %s", human_size(t.done).c_str(), human_size(t.total).c_str());
                     ImGui::EndGroup();
                 }
             });
@@ -254,7 +255,7 @@ void draw_trash_view(App& a) {
                     a.trash_sel.clear();
                     a.trash_dirty = true;
                     a.tree_dirty = true;
-                    a.notify("Put back " + std::to_string(ok) + " item(s)");
+                    a.notify("Put back " + plural(ok, "item"));
                     if (a.engine) a.engine->request_sync();
                 });
             });

@@ -300,7 +300,7 @@ void draw_file_browser(App& a) {
     switch (b.mode) {
         case BrowseMode::OpenMany: {
             for (auto& n : b.sel) result.push_back(join(b.cwd, n));
-            ok_label = result.empty() ? "Select files or folders" : "Choose " + std::to_string(result.size()) + " item(s)";
+            ok_label = result.empty() ? "Select files or folders" : "Choose " + plural(result.size(), "Item");
             ImGui::TextDisabled("Ctrl/Shift-click to select several; folders are uploaded with their contents.");
             break;
         }

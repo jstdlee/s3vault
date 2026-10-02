@@ -135,7 +135,7 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
         }
         // Everything shows up in Transfers right away as "queued".
         for (auto& it : items) it.tid = eng->transfer_begin("upload", it.logical, it.size, true);
-        eng->log("upload started: " + std::to_string(items.size()) + " file(s) → /" + dest_dir);
+        eng->log("Uploading " + plural(items.size(), "file") + " to /" + dest_dir);
         std::vector<RemoteEntry> all;
         v->refresh(&all);
         std::map<std::string, RemoteEntry> by;
@@ -158,7 +158,7 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
                         if (on_exists == 2) {
                             skipped++;
                             eng->transfer_end(it.tid);
-                            eng->log("skipped (already exists): " + it.logical);
+                            eng->log("Skipped, already there: " + it.logical);
                             continue;
                         }
                         if (on_exists == 1) {
@@ -178,10 +178,10 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
                     eng->transfer_end(it.tid);
                     if (r.ok) {
                         ok++;
-                        eng->log("uploaded " + shown + (ends_with(key, ".gpg") ? " (encrypted)" : ""));
+                        eng->log("Uploaded " + shown + (ends_with(key, ".gpg") ? " (encrypted)" : ""));
                     } else {
                         failed++;
-                        eng->log("upload failed: " + it.logical + " (" + r.error + ")");
+                        eng->log("Upload failed: " + it.logical + " (" + r.error + ")");
                         std::lock_guard<std::mutex> lk(err_mu);
                         last_err = r.error;
                     }
@@ -193,7 +193,7 @@ void upload_files(App& a, std::vector<std::string> files, std::string dest_dir, 
         int nok = ok, nskip = skipped, nfail = failed;
         a.post([&a, nok, nskip, nfail, last_err] {
             a.tree_dirty = true;
-            std::string m = "Uploaded " + std::to_string(nok) + " file(s)";
+            std::string m = "Uploaded " + plural(nok, "file");
             if (nskip) m += ", skipped " + std::to_string(nskip);
             if (nfail) m += ", " + std::to_string(nfail) + " failed: " + last_err;
             a.notify(m, nfail > 0);
@@ -231,10 +231,10 @@ void download_all(App& a, const std::string& dest_parent, bool decrypt) {
         if (!decrypt)  // vault metadata: needed to open the encrypted copy later
             for (const char* m : {".s3vault/vault.json", ".s3vault/key.gpg"})
                 items.push_back({v->prefix() + m, dest + "/" + m, 0, 0, true});
-        if (!mkdirs(dest, 0700)) { a.post([&a, dest] { a.notify("cannot create " + dest, true); }); return; }
+        if (!mkdirs(dest, 0700)) { a.post([&a, dest] { a.notify("Can't create " + display_path(dest), true); }); return; }
         for (auto& it : items) it.tid = eng->transfer_begin("download", it.out.substr(dest.size() + 1), it.size, true);
-        eng->log(std::string("download all (") + (decrypt ? "decrypted" : "encrypted, as stored") + "): " +
-                 std::to_string(items.size()) + " file(s) → " + dest);
+        eng->log("Downloading " + plural(items.size(), "file") + (decrypt ? " (decrypted)" : " (encrypted, as stored)") + " to " +
+                 display_path(dest));
         std::atomic<size_t> next{0};
         std::atomic<int> ok{0}, failed{0};
         std::vector<std::thread> pool;
@@ -248,15 +248,15 @@ void download_all(App& a, const std::string& dest_parent, bool decrypt) {
                     if (r.ok) ok++;
                     else {
                         // key.gpg may not exist in a vault without password: not an error
-                        if (!ends_with(it.key, ".s3vault/key.gpg")) { failed++; eng->log("download failed: " + it.key + " (" + r.error + ")"); }
+                        if (!ends_with(it.key, ".s3vault/key.gpg")) { failed++; eng->log("Download failed: " + it.key + " (" + r.error + ")"); }
                     }
                 }
             });
         for (auto& th : pool) th.join();
         int nok = ok, nf = failed;
-        eng->log("download all finished: " + std::to_string(nok) + " ok, " + std::to_string(nf) + " failed → " + dest);
+        eng->log("Download finished: " + plural(size_t(nok), "file") + " saved" + (nf ? ", " + std::to_string(nf) + " failed" : "") + " in " + display_path(dest));
         a.post([&a, nok, nf, dest] {
-            a.notify("Downloaded " + std::to_string(nok) + " file(s) to " + display_path(dest) + (nf ? " — " + std::to_string(nf) + " failed (see Transfers)" : ""), nf > 0);
+            a.notify("Downloaded " + plural(nok, "file") + " to " + display_path(dest) + (nf ? " — " + std::to_string(nf) + " failed (see Transfers)" : ""), nf > 0);
         });
     });
 }

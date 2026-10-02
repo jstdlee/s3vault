@@ -107,8 +107,7 @@ void draw_edits_tab(App& a) {
             size_t lines = std::count(d->text.begin(), d->text.end(), '\n') + 1;
             ImGui::SameLine(0, 16);
             ImGui::AlignTextToFramePadding();
-            if (d->dirty()) ImGui::TextColored(P.orange, ICON_FA_CIRCLE "  Edited");
-            else ImGui::TextColored(P.green, ICON_FA_CHECK "  Saved");
+            status_text(d->dirty() ? P.orange : P.green, d->dirty() ? "Edited" : "Saved");
             ImGui::SameLine(0, 12);
             small_dim("/%s%s · %zu lines · %s", d->logical.c_str(), ends_with(d->key, ".gpg") ? " · encrypted" : "", lines, human_size(d->text.size()).c_str());
             if (!d->error.empty()) ImGui::TextColored(P.red, "%s", d->error.c_str());

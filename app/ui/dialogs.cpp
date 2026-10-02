@@ -216,7 +216,7 @@ void draw_modals(App& a) {
             auto eng = a.engine;
             run_sheet_job(a, [v, eng, path] {
                 OpResult x = v->mkdir(path);
-                if (x.ok) { v->refresh(); eng->log("created folder /" + path); }
+                if (x.ok) { v->refresh(); eng->log("Created folder /" + path); }
                 return x;
             }, [&a, path] { a.tree_dirty = true; a.selected = path; });
         } else if (r == 2) {
@@ -377,7 +377,7 @@ void draw_modals(App& a) {
                     v->refresh();
                     if (fails) return OpResult::fail(std::to_string(fails) + " could not be resolved: " + last);
                     return OpResult::success();
-                }, [&a, n = ids.size()] { a.conflict_sel.clear(); a.tree_dirty = true; a.notify("Resolved " + std::to_string(n) + " conflict(s)"); });
+                }, [&a, n = ids.size()] { a.conflict_sel.clear(); a.tree_dirty = true; a.notify("Resolved " + plural(n, "conflict")); });
             }
         } else if (r == 2) {
             close_sheet(a);
@@ -540,7 +540,7 @@ void draw_modals(App& a) {
             run_sheet_job(a, [v, eng] {
                 int n = 0;
                 OpResult x = v->purge_trash(0, &n);
-                eng->log("emptied vault trash: " + std::to_string(n) + " object(s)");
+                eng->log("Emptied the vault trash: " + plural(n, "object") + " deleted");
                 return x;
             }, [&a] { a.trash_dirty = true; a.trash_sel.clear(); a.notify("Trash emptied"); });
         } else if (r == 2) {

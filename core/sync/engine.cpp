@@ -282,7 +282,7 @@ void Engine::exec_one(const RootRow& root, const PlanInput& in, const Action& a,
             db_.upsert_file(root.id, row);
             std::lock_guard<std::mutex> lk(mu);
             rep.uploaded++;
-            log("uploaded " + a.rel);
+            log("Uploaded " + a.rel);
             return;
         }
         case ActKind::Download: {
@@ -306,7 +306,7 @@ void Engine::exec_one(const RootRow& root, const PlanInput& in, const Action& a,
             db_.upsert_file(root.id, row);
             std::lock_guard<std::mutex> lk(mu);
             rep.downloaded++;
-            log("downloaded " + a.rel);
+            log("Downloaded " + a.rel);
             return;
         }
         case ActKind::DeleteLocal: {
@@ -323,7 +323,7 @@ void Engine::exec_one(const RootRow& root, const PlanInput& in, const Action& a,
             db_.delete_file(root.id, a.rel);
             std::lock_guard<std::mutex> lk(mu);
             rep.deleted_local++;
-            log("deleted locally (to trash): " + a.rel);
+            log("Moved to this computer's trash: " + a.rel);
             return;
         }
         case ActKind::DeleteRemote: {
@@ -337,7 +337,7 @@ void Engine::exec_one(const RootRow& root, const PlanInput& in, const Action& a,
             db_.delete_file(root.id, a.rel);
             std::lock_guard<std::mutex> lk(mu);
             rep.deleted_remote++;
-            log("deleted on server (to vault trash): " + a.rel);
+            log("Moved to the vault trash: " + a.rel);
             return;
         }
         case ActKind::CheckEqual: {
@@ -453,7 +453,7 @@ SyncReport Engine::sync_all(bool refresh_remote) {
         if (!r.ok) {
             total.errors++;
             total.messages.push_back(r.error);
-            log("sync: " + r.error);
+            log("Sync: " + r.error);
             syncing_ = false;
             return total;
         }
@@ -482,7 +482,7 @@ SyncReport Engine::sync_all(bool refresh_remote) {
         last_summary_ = total.summary();
     }
     if (total.uploaded || total.downloaded || total.deleted_local || total.deleted_remote || total.errors)
-        log("sync: " + total.summary());
+        log("Sync: " + total.summary());
     syncing_ = false;
     return total;
 }

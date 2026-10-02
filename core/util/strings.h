@@ -13,6 +13,8 @@ std::vector<std::string> split(std::string_view s, char sep);
 bool starts_with(std::string_view s, std::string_view p);
 bool ends_with(std::string_view s, std::string_view p);
 std::string to_lower(std::string_view s);
+// "1 file", "6 files" (`many` defaults to one + "s").
+std::string plural(size_t n, const char* one, const char* many = nullptr);
 
 // RFC 3986 encoding as SigV4 wants it; '/' kept when encode_slash is false.
 std::string uri_encode(std::string_view s, bool encode_slash);

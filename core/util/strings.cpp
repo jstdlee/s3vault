@@ -7,6 +7,10 @@
 
 namespace s3v {
 
+std::string plural(size_t n, const char* one, const char* many) {
+    return std::to_string(n) + " " + (n == 1 ? std::string(one) : many ? std::string(many) : std::string(one) + "s");
+}
+
 std::string trim(std::string_view s) {
     size_t a = 0, b = s.size();
     while (a < b && isspace(static_cast<unsigned char>(s[a]))) a++;

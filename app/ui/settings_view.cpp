@@ -246,7 +246,7 @@ void draw_settings_view(App& a) {
         int i = 1;
         for (size_t k = 0; k < v.size(); k++)
             if (std::abs(a.cfg.ui.font_size - v[k]) < 0.3f) i = int(k);
-        if (prefs::choice("Text size", "Everything in the window, larger or smaller", &i, {"90%", "100%", "115%", "130%"})) {
+        if (prefs::choice("Text size", "Everything in the window; Ctrl+ Ctrl– Ctrl+0 too", &i, {"90%", "100%", "115%", "130%"})) {
             a.cfg.ui.font_size = v[size_t(i)];
             dirty = true;
         }

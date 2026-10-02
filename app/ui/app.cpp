@@ -137,10 +137,10 @@ void connect_async(App& a) {
 void app_init(App& a) {
     a.cfg.load(config_path());
     std::string err;
-    if (!a.db.open(data_dir() + "/index.db", &err)) a.notify("index: " + err, true);
+    if (!a.db.open(data_dir() + "/index.db", &err)) a.notify("Index error: " + err, true);
     a.form = a.cfg;
     int n = platform::cleanup_stale_tmp();
-    if (n) a.notify("Removed " + std::to_string(n) + " leftover temporary folder(s) from a previous session");
+    if (n) a.notify("Removed " + plural(n, "leftover temporary folder") + " from a previous session");
     connect_async(a);
 }
 
@@ -472,7 +472,8 @@ static void sidebar(App& a, float w, float h) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 wp = ImGui::GetWindowPos();
     dl->AddLine(ImVec2(wp.x + w - 1, wp.y), ImVec2(wp.x + w - 1, wp.y + h), col(P.border));
-    float footer_h = 92;
+    // Footer: status line + one small line + the icon row; grows with the text size.
+    float footer_h = 12 + ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FontSizeBase * 0.86f + 10 + 40;
 
     ImGui::SetCursorPos(ImVec2(16, 16));
     ImGui::TextColored(P.accent, ICON_FA_VAULT);
@@ -485,12 +486,12 @@ static void sidebar(App& a, float w, float h) {
     ImGui::SetCursorPosX(8);
     ImGui::BeginChild("##sidelist", ImVec2(w - 16, h - ImGui::GetCursorPosY() - footer_h), ImGuiChildFlags_None, ImGuiWindowFlags_None);
     bool files = a.view == View::Files;
-    side_section("VAULT");
+    side_section("Vault");
     if (side_item(ICON_FA_HARD_DRIVE, P.accent, "All Files", files && a.cwd.empty())) navigate(a, "");
     if (side_item(ICON_FA_TRASH, P.dim, "Trash", a.view == View::Trash)) set_view(a, View::Trash);
 
     auto roots = a.db.roots();
-    side_section("SYNCED FOLDERS");
+    side_section("Synced folders");
     auto conflicts = a.db.conflicts();
     for (auto& r : roots) {
         size_t nconf = 0;
@@ -502,7 +503,7 @@ static void sidebar(App& a, float w, float h) {
         ImGui::PushID(r.id);
         if (side_item(ICON_FA_FOLDER, P.folder, label.c_str(), sel, "", nullptr, &dotc)) navigate(a, r.remote_prefix);
         std::string t = display_path(r.local_path) + "  ↔  /" + r.remote_prefix + "\n" +
-                        (r.paused ? "Paused" : missing ? "Folder missing on this computer" : nconf ? std::to_string(nconf) + " conflict(s)" : "In sync");
+                        (r.paused ? "Paused" : missing ? "Folder missing on this computer" : nconf ? plural(nconf, "conflict") : "In sync");
         tip(t);
         if (ImGui::BeginPopupContextItem("##rootmenu")) {
             if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "   Show in Vault")) navigate(a, r.remote_prefix);
@@ -524,7 +525,7 @@ static void sidebar(App& a, float w, float h) {
     }
     if (side_item(ICON_FA_PLUS, P.dim, "Add Folder…", false)) add_tracked_folder(a);
 
-    side_section("ACTIVITY");
+    side_section("Activity");
     auto ts = a.engine ? a.engine->transfers() : std::vector<Transfer>{};
     if (side_item(ICON_FA_ARROW_RIGHT_ARROW_LEFT, P.dim, "Transfers", a.view == View::Transfers, ts.empty() ? "" : std::to_string(ts.size()), &P.accent))
         set_view(a, View::Transfers);
@@ -552,8 +553,8 @@ static void sidebar(App& a, float w, float h) {
         else if (a.conn == C::Error) { line1 = "Can't reach storage"; line2 = "Open Settings for details"; c = P.red; icon = ICON_FA_CIRCLE_EXCLAMATION; }
         else if (a.conn != C::Ready) { line1 = "Not connected"; icon = ICON_FA_CLOUD; }
         else if (key_needed(a)) { line1 = "Locked"; line2 = "Encrypted files are paused"; c = P.orange; icon = ICON_FA_LOCK; }
-        else if (nx || (a.engine && a.engine->syncing())) { line1 = nx ? "Syncing " + std::to_string(nx) + " files" : "Checking for changes"; c = P.accent; icon = ICON_FA_ROTATE; }
-        else if (!conflicts.empty()) { line1 = "Needs your attention"; line2 = std::to_string(conflicts.size()) + " conflict(s)"; c = P.orange; icon = ICON_FA_TRIANGLE_EXCLAMATION; }
+        else if (nx || (a.engine && a.engine->syncing())) { line1 = nx ? "Syncing " + plural(nx, "file") : "Checking for changes"; c = P.accent; icon = ICON_FA_ROTATE; }
+        else if (!conflicts.empty()) { line1 = "Needs your attention"; line2 = plural(conflicts.size(), "conflict") + " to review"; c = P.orange; icon = ICON_FA_TRIANGLE_EXCLAMATION; }
         else { line1 = "Up to date"; c = P.green; }
         if (line2.empty() && a.engine && a.engine->last_sync()) line2 = "Checked " + format_local_time(a.engine->last_sync()).substr(11);
         ImGui::TextColored(c, "%s", icon);
@@ -602,6 +603,27 @@ static void toast(App& a) {
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(4);
+}
+
+// Ctrl+= / Ctrl+- / Ctrl+0: text size (the same steps as Settings → Text size); Ctrl+,: Settings.
+static bool setup_needed(App& a);
+
+static void global_shortcuts(App& a, bool locked) {
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.KeyCtrl || io.KeyAlt) return;
+    static const float sizes[] = {13.5f, 15.0f, 17.25f, 19.5f};
+    int cur = 1;
+    for (int k = 0; k < 4; k++)
+        if (std::abs(a.cfg.ui.font_size - sizes[k]) < 0.3f) cur = k;
+    int want = -1;
+    if (ImGui::IsKeyPressed(ImGuiKey_Equal, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, false)) want = std::min(3, cur + 1);
+    if (ImGui::IsKeyPressed(ImGuiKey_Minus, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, false)) want = std::max(0, cur - 1);
+    if (ImGui::IsKeyPressed(ImGuiKey_0, false) || ImGui::IsKeyPressed(ImGuiKey_Keypad0, false)) want = 1;
+    if (want >= 0 && std::abs(a.cfg.ui.font_size - sizes[want]) > 0.01f) {
+        a.cfg.ui.font_size = sizes[want];
+        save_settings(a);
+    }
+    if (!locked && a.modal.empty() && ImGui::IsKeyPressed(ImGuiKey_Comma, false) && !setup_needed(a)) set_view(a, View::Settings);
 }
 
 static bool setup_needed(App& a) {
@@ -668,6 +690,7 @@ void app_frame(App& a) {
     draw_modals(a);
     draw_file_browser(a);
     toast(a);
+    global_shortcuts(a, locked_screen);
 }
 
 }  // namespace s3v::ui

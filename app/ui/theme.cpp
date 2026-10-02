@@ -42,7 +42,7 @@ void apply_theme(bool dark) {
         P.folder = hex(0x5fb2f6);
     } else {
         P.bg = hex(0xf4f4f6); P.sidebar = hex(0xebebef); P.card = hex(0xffffff); P.border = hex(0xe3e3e8);
-        P.divider = hex(0xececf0); P.text = hex(0x212126); P.dim = hex(0x85858d); P.faint = hex(0xb4b4ba);
+        P.divider = hex(0xececf0); P.text = hex(0x212126); P.dim = hex(0x737379);  // Magpie measured #85858d; darkened for WCAG AA P.faint = hex(0xb4b4ba);
         P.track = hex(0xf1f1f4); P.pill = hex(0xffffff); P.hover = hex(0x000000, 0.035f); P.select = hex(0x007aff, 0.16f);
         P.accent = hex(0x007aff); P.accent_hover = hex(0x2b8fff); P.on_accent = hex(0xffffff);
         P.red = hex(0xff3b30); P.orange = hex(0xff9500); P.green = hex(0x28cd41); P.blue = hex(0x007aff);
@@ -122,7 +122,7 @@ void apply_theme(bool dark) {
     c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_TableRowBgAlt] = dark ? hex(0xffffff, 0.018f) : hex(0x000000, 0.018f);
     c[ImGuiCol_TextSelectedBg] = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.30f);
-    c[ImGuiCol_NavCursor] = P.accent;
+    c[ImGuiCol_NavCursor] = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.6f);
     c[ImGuiCol_ModalWindowDimBg] = dark ? hex(0x000000, 0.45f) : hex(0x000000, 0.22f);
     c[ImGuiCol_DragDropTarget] = P.accent;
 }
@@ -142,6 +142,7 @@ bool button(const char* label, Btn kind, ImVec2 size, bool enabled) {
     ImGui::BeginDisabled(!enabled);
     ImVec2 p = ImGui::GetCursorScreenPos();
     bool pressed = ImGui::InvisibleButton(label, ImVec2(w, h));
+    focus_ring(6.0f);
     bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float alpha = enabled ? 1.0f : 0.45f;
@@ -168,6 +169,7 @@ bool icon_button(const char* icon, const char* tip_text, bool on, bool enabled, 
     bool pressed = ImGui::InvisibleButton("##ib", ImVec2(size, size));
     ImGui::PopID();
     ImGui::PopID();
+    focus_ring(7.0f);
     bool hov = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (on) dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), col(P.select), 7.0f);
@@ -197,11 +199,25 @@ void small_dim(const char* fmt, ...) {
     ImGui::PopFont();
 }
 
-void status_dot(const ImVec4& c, float r) {
+void status_dot(const ImVec4& c, float r, float dy) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float h = ImGui::GetTextLineHeight();
-    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + h / 2), r, col(c), 16);
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + dy + h / 2), r, col(c), 16);
     ImGui::Dummy(ImVec2(r * 2, h));
+}
+
+void status_text(const ImVec4& c, const char* text) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float h = ImGui::GetTextLineHeight(), r = 3.5f;
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + h / 2), r, col(c), 16);
+    ImGui::SetCursorScreenPos(ImVec2(p.x + r * 2 + 7, p.y));
+    ImGui::TextUnformatted(text);
+}
+
+void focus_ring(float rounding) {
+    if (!ImGui::IsItemFocused() || !ImGui::GetIO().NavVisible) return;
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    ImGui::GetWindowDrawList()->AddRect(ImVec2(a.x - 2.5f, a.y - 2.5f), ImVec2(b.x + 2.5f, b.y + 2.5f), col(P.accent, 0.5f), rounding + 2.5f, 0, 3.0f);
 }
 
 void badge(const std::string& text, const ImVec4& bg, const ImVec4& fg) {
@@ -219,7 +235,8 @@ void badge(const std::string& text, const ImVec4& bg, const ImVec4& fg) {
 bool search_field(const char* id, char* buf, size_t n, float width, const char* hint) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float h = ImGui::GetFrameHeight();
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(28, ImGui::GetStyle().FramePadding.y));
+    float icon_w = ImGui::CalcTextSize(ICON_FA_MAGNIFYING_GLASS).x;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 + icon_w + 7, ImGui::GetStyle().FramePadding.y));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, h / 2);
     ImGui::SetNextItemWidth(width);
     bool ch = ImGui::InputTextWithHint(id, hint, buf, n);
@@ -463,10 +480,10 @@ void page_begin(float max_width) {
 
 void page_end() { ImGui::Dummy(ImVec2(0, 24)); }
 
-void section(const char* title) {
+void section(const char* title, bool caps) {
     ImGui::Dummy(ImVec2(0, 12));
     std::string up;
-    for (const char* s = title; *s; s++) up += char(toupper(static_cast<unsigned char>(*s)));
+    for (const char* s = title; *s; s++) up += caps ? char(toupper(static_cast<unsigned char>(*s))) : *s;
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.8f);
     ImGui::SetCursorPosX(g_card.x0 + 3);
     ImGui::TextDisabled("%s", up.c_str());
@@ -555,18 +572,21 @@ bool seg(const char* id, int* v, const std::vector<std::string>& labels) {
             *v = i;
             changed = true;
         }
-        bool hov = ImGui::IsItemHovered();
+        focus_ring(6.0f);
+        bool hov = ImGui::IsItemHovered(), held = ImGui::IsItemActive();
         ImGui::PopID();
         ImVec2 a(x, p.y + 2), b(x + iw, p.y + h - 2);
         if (*v == i) {
             if (!P.dark) dl->AddRectFilled(ImVec2(a.x, a.y + 1), ImVec2(b.x, b.y + 1), col(ImVec4(0, 0, 0, 0.08f)), 6.0f);
             dl->AddRectFilled(a, b, col(P.pill), 6.0f);
             dl->AddRect(a, b, col(P.border), 6.0f);
+        } else if (held) {  // responds on press, before release
+            dl->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_FrameBgActive), 6.0f);
         } else if (hov) {
             dl->AddRectFilled(a, b, col(P.hover), 6.0f);
         }
         ImVec2 ts = ImGui::CalcTextSize(labels[size_t(i)].c_str());
-        dl->AddText(ImVec2(x + (iw - ts.x) / 2, p.y + (h - ts.y) / 2), col(*v == i ? P.text : P.dim), labels[size_t(i)].c_str());
+        dl->AddText(ImVec2(x + (iw - ts.x) / 2, p.y + (h - ts.y) / 2), col(*v == i || hov ? P.text : P.dim), labels[size_t(i)].c_str());
         x += iw;
     }
     ImGui::PopID();
@@ -622,10 +642,10 @@ bool action(const char* title, const char* desc, const char* label, Btn kind, bo
 }
 
 void info(const char* title, const char* desc, const char* value, const ImVec4* value_col) {
-    float w = std::min(ImGui::CalcTextSize(value).x, g_card.w * 0.55f);
+    float w = std::min(ImGui::CalcTextSize(value).x + (value_col ? 14 : 0), g_card.w * 0.55f);
     row(title, desc, w, [&] {
         ImGui::AlignTextToFramePadding();
-        if (value_col) ImGui::TextColored(*value_col, "%s", value);
+        if (value_col) status_text(*value_col, value);
         else ImGui::TextDisabled("%s", value);
     });
 }
