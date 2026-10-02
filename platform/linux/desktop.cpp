@@ -10,6 +10,10 @@
 
 namespace s3v::platform {
 
+const char* keychain_name() { return "Secret Service (libsecret)"; }
+const char* install_gpg_hint() { return "Install gnupg"; }
+const char* install_pdf_hint() { return "Install poppler-utils to preview PDFs"; }
+
 // Splits a command line on spaces, honoring simple quotes.
 static std::vector<std::string> split_cmd(const std::string& s) {
     std::vector<std::string> out;

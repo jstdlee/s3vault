@@ -10,6 +10,11 @@
 
 namespace s3v::platform {
 
+// ---- What to tell the user (names and install hints differ per OS) ----
+const char* keychain_name();     // "Secret Service (libsecret)", "Windows Credential Manager"
+const char* install_gpg_hint();  // "Install gnupg", "Install Gpg4win"
+const char* install_pdf_hint();  // how to get pdftoppm
+
 // ---- Secrets (libsecret / Keychain / Credential Manager / Keystore) ----
 bool keychain_available();
 // Loads libsecret/glib and does one lookup so their one-time initialisation happens on the calling thread.

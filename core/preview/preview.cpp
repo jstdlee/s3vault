@@ -124,7 +124,7 @@ bool PdfDoc::open(std::string bytes, std::string& error) {
 bool PdfDoc::render(int page, int dpi, std::string& png, std::string& error) {
     if (bytes_.empty()) { error = "no document"; return false; }
     std::string exe = find_executable("pdftoppm");
-    if (exe.empty()) { error = "pdftoppm not found (install poppler-utils)"; return false; }
+    if (exe.empty()) { error = std::string("pdftoppm not found (") + platform::install_pdf_hint() + ")"; return false; }
     std::string err;
     std::string p = std::to_string(page);
     // -scale-to bounds the long side (≈ dpi × 12 in, max 2400 px) whatever page size the file claims.

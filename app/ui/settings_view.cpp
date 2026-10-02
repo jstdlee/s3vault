@@ -280,8 +280,8 @@ void draw_settings_view(App& a) {
             d.at = glfwGetTime();
         }
         std::string gv = d.gpg_ok ? "GnuPG " + d.gpg_ver : "Not found";
-        prefs::info("Encryption program", d.gpg_ok ? display_path(d.gpg_exe).c_str() : "Install gnupg", gv.c_str(), d.gpg_ok ? &P.green : &P.red);
-        prefs::info("PDF previews", d.pdf.empty() ? "Install poppler-utils to preview PDFs" : display_path(d.pdf).c_str(),
+        prefs::info("Encryption program", d.gpg_ok ? display_path(d.gpg_exe).c_str() : platform::install_gpg_hint(), gv.c_str(), d.gpg_ok ? &P.green : &P.red);
+        prefs::info("PDF previews", d.pdf.empty() ? platform::install_pdf_hint() : display_path(d.pdf).c_str(),
                     d.pdf.empty() ? "Off" : "On", d.pdf.empty() ? &P.orange : &P.green);
         prefs::info("Keychain", "Stores the storage secret and, if you choose, the vault key", d.keychain ? "Available" : "Not available",
                     d.keychain ? &P.green : &P.orange);

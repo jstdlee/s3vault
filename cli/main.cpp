@@ -343,11 +343,11 @@ int main(int argc, char** argv) {
         c.cfg.load(config_path());
         Gpg g(c.cfg.deps.gpg);
         printf("gpg        %s\n", g.available() ? (g.exe() + " " + g.version()).c_str()
-                                                 : ("MISSING " + g.version()).c_str());
+                                                 : ("MISSING " + g.version() + " — " + platform::install_gpg_hint()).c_str());
         std::string p = find_executable(c.cfg.deps.pdftoppm == "auto" ? "pdftoppm" : c.cfg.deps.pdftoppm);
-        printf("pdftoppm   %s\n", p.empty() ? "missing (PDF preview disabled; install poppler-utils)" : p.c_str());
+        printf("pdftoppm   %s\n", p.empty() ? ("missing (" + std::string(platform::install_pdf_hint()) + ")").c_str() : p.c_str());
         printf("pdfinfo    %s\n", find_executable("pdfinfo").empty() ? "missing" : find_executable("pdfinfo").c_str());
-        printf("keychain   %s\n", platform::keychain_available() ? "Secret Service (libsecret)" : "not available");
+        printf("keychain   %s\n", platform::keychain_available() ? platform::keychain_name() : "not available");
         printf("tmp dir    %s (%s)\n", platform::session_tmp_dir().c_str(),
                platform::session_tmp_in_ram() ? "RAM/tmpfs" : "DISK — files are overwritten before deletion");
         return g.available() ? 0 : 1;

@@ -120,13 +120,21 @@ jobs:
       - name: Smoke test the package (CLI deps, GUI frame via Mesa)
         run: |
           dir="${{ steps.pkg.outputs.dir }}"
-          "$dir/s3vault-cli.exe" --home "$PWD/smoke-home" deps
+          home="$(cygpath -m "$PWD/smoke-home")"
+          "$dir/s3vault-cli.exe" --home "$home" deps
           # The runner has no GPU driver with OpenGL 3.3: borrow Mesa's software opengl32.dll for this test only.
           mkdir -p smoke && cp -r "$dir"/* smoke/
           cp /ucrt64/bin/opengl32.dll smoke/
-          ldd /ucrt64/bin/opengl32.dll | awk '$3 ~ /^\/ucrt64\// {print $3}' | sort -u | xargs -I{} cp -n {} smoke/
-          timeout 120 smoke/s3vault.exe --home "$PWD/smoke-home" --script "sleep:1;shot:$PWD/windows-setup.png;quit"
-          test -s windows-setup.png
+          ldd /ucrt64/bin/opengl32.dll | awk '$3 ~ /^\/ucrt64\// {print $3}' | sort -u | xargs -I{} cp -n {} smoke/ || true
+          ls smoke
+          shot="$(cygpath -m "$PWD/windows-setup.png")"
+          set +e
+          MSYS2_ARG_CONV_EXCL='*' GALLIUM_DRIVER=llvmpipe timeout 120 smoke/s3vault.exe --home "$home" --script "sleep:1;shot:$shot;quit" > gui.log 2>&1
+          rc=$?
+          set -e
+          echo "s3vault.exe exit code: $rc"
+          cat gui.log
+          test "$rc" = 0 && test -s windows-setup.png
 
       - uses: actions/upload-artifact@v7
         if: always()

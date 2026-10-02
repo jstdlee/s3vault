@@ -34,7 +34,7 @@ Gpg::Gpg(const std::string& configured) {
     std::string out;
     if (run_capture({exe, "--version"}, "", &out, nullptr, 1 << 16, 5000) != 0) return;
     // "gpg (GnuPG) 2.4.4"
-    std::string first = out.substr(0, out.find('\n'));
+    std::string first = trim(out.substr(0, out.find('\n')));  // trim: "\r\n" on Windows
     version_ = first.substr(first.rfind(' ') + 1);
     int major = atoi(version_.c_str());
     int minor = atoi(version_.c_str() + (version_.find('.') == std::string::npos ? 0 : version_.find('.') + 1));

@@ -11,6 +11,10 @@
 
 namespace s3v::platform {
 
+const char* keychain_name() { return "Windows Credential Manager"; }
+const char* install_gpg_hint() { return "Install Gpg4win (gpg4win.org)"; }
+const char* install_pdf_hint() { return "Put Poppler's pdftoppm.exe on PATH to preview PDFs"; }
+
 bool trash_local(const std::string& path) {
     std::wstring from = to_wide(path);
     for (auto& c : from)
