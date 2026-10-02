@@ -155,13 +155,13 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v7  # for the release notes; before the download, since checkout cleans the workspace
+
       - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: s3vault-*
           merge-multiple: true
-
-      - uses: actions/checkout@v7
 
       - name: Publish release
         env:
