@@ -1,6 +1,6 @@
 #include "sync/ignore.h"
 
-#include <fnmatch.h>
+#include "util/compat.h"
 
 #include "util/fs.h"
 #include "util/strings.h"

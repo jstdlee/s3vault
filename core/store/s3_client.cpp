@@ -1,6 +1,6 @@
 #include "store/s3_client.h"
 
-#include <unistd.h>
+#include "util/compat.h"
 
 #include <chrono>
 #include <cstdio>
@@ -204,6 +204,9 @@ S3Result S3Client::perform(Req& r) {
         c->easy_setopt(h, CURLOPT_URL, url.c_str());
         c->easy_setopt(h, CURLOPT_HTTPHEADER, hl);
         c->easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+#ifdef _WIN32
+        c->easy_setopt(h, CURLOPT_SSL_OPTIONS, long(CURLSSLOPT_NATIVE_CA));  // trust the Windows certificate store
+#endif
         c->easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
         c->easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 1L);
         c->easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);

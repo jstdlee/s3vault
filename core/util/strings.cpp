@@ -3,6 +3,8 @@
 #include <cctype>
 #include <cstdio>
 
+#include "util/compat.h"
+
 namespace s3v {
 
 std::string trim(std::string_view s) {

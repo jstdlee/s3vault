@@ -16,7 +16,7 @@
 
 namespace s3v::ui {
 
-static void wipe_buf(char* b, size_t n) { explicit_bzero(b, n); }
+static void wipe_buf(char* b, size_t n) { secure_zero(b, n); }
 
 static std::string join_logical(const std::string& dir, const std::string& name) {
     return dir.empty() ? name : dir + "/" + name;

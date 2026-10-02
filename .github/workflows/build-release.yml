@@ -1,7 +1,7 @@
 name: build and release
 
-# Every push to main: compile + test on Linux x86_64 and arm64, then refresh the rolling "nightly" pre-release.
-# A tag v*: the same build, published as a versioned release.
+# Every push to main: compile + test on Linux x86_64, Linux arm64 and Windows x86_64, then refresh the rolling
+# "nightly" pre-release. A tag v*: the same build, published as a versioned release.
 on:
   push:
     branches: [main]
@@ -67,15 +67,93 @@ jobs:
             ${{ steps.pkg.outputs.name }}.tar.gz
             ${{ steps.pkg.outputs.name }}.tar.gz.sha256
 
+  build-windows:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git curl python zip
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-curl mingw-w64-ucrt-x86_64-gnupg mingw-w64-ucrt-x86_64-mesa
+
+      - name: Fetch pinned third-party sources
+        run: scripts/fetch-deps.sh
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Unit tests (native gpg, Credential Manager, CreateProcess pipes)
+        env:
+          S3VAULT_REQUIRE_GPG: "1"
+          S3VAULT_TEST_KEYCHAIN: "1"
+        run: build/s3vault-tests.exe
+
+      - name: Package
+        id: pkg
+        run: |
+          ver="$(git describe --tags --always)"
+          name="s3vault-${ver}-windows-x86_64"
+          cmake --install build --prefix "stage/$name"
+          # libcurl and the DLLs it needs from MSYS2 (the executables themselves are statically linked).
+          cp /ucrt64/bin/libcurl-4.dll "stage/$name/"
+          ldd /ucrt64/bin/libcurl-4.dll | awk '$3 ~ /^\/ucrt64\// {print $3}' | sort -u | xargs -I{} cp {} "stage/$name/"
+          cp README.md LICENSE "stage/$name/"
+          cp platform/windows/README-windows.txt "stage/$name/README-windows.txt"
+          (cd stage && zip -qr "../$name.zip" "$name")
+          sha256sum "$name.zip" > "$name.zip.sha256"
+          ls "stage/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "dir=stage/$name" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test the package (CLI deps, GUI frame via Mesa)
+        run: |
+          dir="${{ steps.pkg.outputs.dir }}"
+          "$dir/s3vault-cli.exe" --home "$PWD/smoke-home" deps
+          # The runner has no GPU driver with OpenGL 3.3: borrow Mesa's software opengl32.dll for this test only.
+          mkdir -p smoke && cp -r "$dir"/* smoke/
+          cp /ucrt64/bin/opengl32.dll smoke/
+          ldd /ucrt64/bin/opengl32.dll | awk '$3 ~ /^\/ucrt64\// {print $3}' | sort -u | xargs -I{} cp -n {} smoke/
+          timeout 120 smoke/s3vault.exe --home "$PWD/smoke-home" --script "sleep:1;shot:$PWD/windows-setup.png;quit"
+          test -s windows-setup.png
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-smoke-screenshot
+          path: windows-setup.png
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.name }}.zip
+            ${{ steps.pkg.outputs.name }}.zip.sha256
+
   release:
-    needs: build
+    needs: [build, build-windows]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: s3vault-*
           merge-multiple: true
+
+      - uses: actions/checkout@v7
 
       - name: Publish release
         env:
@@ -83,16 +161,14 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           ls -l dist
+          sed "s/@SHA@/${GITHUB_SHA::7}/" .github/release-notes.md > notes.md
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             tag="${GITHUB_REF#refs/tags/}"
-            gh release create "$tag" dist/* --repo "$REPO" --title "s3vault $tag" --generate-notes --verify-tag
+            gh release create "$tag" dist/* --repo "$REPO" --title "s3vault $tag" --notes-file notes.md --generate-notes --verify-tag
           else
             # Rolling pre-release that always points at the newest main.
             gh release delete nightly --repo "$REPO" --yes --cleanup-tag || true
             gh release create nightly dist/* --repo "$REPO" --prerelease --target "$GITHUB_SHA" \
               --title "Nightly (${GITHUB_SHA::7})" \
-              --notes "Automatic build of \`main\` at ${GITHUB_SHA::7}. Linux x86_64 and arm64.
-
-          Install: \`tar xzf s3vault-*-linux-<arch>.tar.gz\`, then run \`bin/s3vault\` (GUI) or \`bin/s3vault-cli\`.
-          Runtime needs: libcurl4, gnupg (≥ 2.2); optional poppler-utils (PDF preview) and a Secret Service keyring."
+              --notes-file notes.md
           fi

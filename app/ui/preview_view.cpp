@@ -76,7 +76,7 @@ static bool upload_image(App& a, const std::string& bytes, std::string& err) {
     GLint max_tex = 4096;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
     if (w > max_tex || h > max_tex) {
-        explicit_bzero(px, size_t(w) * size_t(h) * 4);
+        secure_zero(px, size_t(w) * size_t(h) * 4);
         stbi_image_free(px);
         err = "image larger than the GPU texture limit";
         return false;
@@ -91,7 +91,7 @@ static bool upload_image(App& a, const std::string& bytes, std::string& err) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    explicit_bzero(px, size_t(w) * size_t(h) * 4);
+    secure_zero(px, size_t(w) * size_t(h) * 4);
     stbi_image_free(px);
     p.tex = tex;
     p.w = w;

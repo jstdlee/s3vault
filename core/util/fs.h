@@ -31,5 +31,9 @@ std::string home_dir();
 // "/home/me/Documents" → "~/Documents" (for display only).
 std::string display_path(const std::string& path);
 bool copy_file(const std::string& from, const std::string& to);
+// rename(2) semantics everywhere: replaces an existing `to` (Windows rename() refuses to).
+bool rename_replace(const std::string& from, const std::string& to);
+// Absolute, symlink-free path with '/' separators; "" if it does not exist.
+std::string real_path(const std::string& path);
 
 }  // namespace s3v

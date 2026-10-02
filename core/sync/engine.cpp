@@ -1,8 +1,7 @@
 #include "sync/engine.h"
 
 #include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "util/compat.h"
 
 #include <algorithm>
 #include <chrono>
@@ -98,12 +97,11 @@ void Engine::transfer_end(int id) {
 
 int Engine::add_root(const std::string& local_path, const std::string& remote_prefix, const std::string& direction,
                      bool encrypt, std::string& error) {
-    char buf[PATH_MAX];
-    if (!realpath(local_path.c_str(), buf)) {
+    std::string abs = real_path(local_path);
+    if (abs.empty()) {
         error = "folder does not exist: " + local_path;
         return 0;
     }
-    std::string abs = buf;
     if (!stat_path(abs, true).is_dir) {
         error = "not a folder: " + abs;
         return 0;
@@ -317,7 +315,7 @@ void Engine::exec_one(const RootRow& root, const PlanInput& in, const Action& a,
                 // No desktop trash: keep a copy inside the root (ignored by sync).
                 std::string dst = root.local_path + "/.s3vault-trash/" + format_utc_compact(int64_t(time(nullptr))) + "/" + a.rel;
                 mkdirs(path_dirname(dst));
-                if (::rename(abs.c_str(), dst.c_str()) != 0) {
+                if (!rename_replace(abs, dst)) {
                     note("cannot remove local " + a.rel, true);
                     return;
                 }

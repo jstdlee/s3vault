@@ -33,7 +33,7 @@ static bool storage_changed(App& a) {
 void settings_connect(App& a) {
     if (a.secret_buf[0]) {
         bool ok = platform::keychain_store(Vault::secret_account(a.form.storage), trim(a.secret_buf));
-        explicit_bzero(a.secret_buf, sizeof a.secret_buf);
+        secure_zero(a.secret_buf, sizeof a.secret_buf);
         if (!ok) a.notify("The keychain is not available; set S3VAULT_SECRET_KEY in the environment instead", true);
     }
     a.cfg.storage = a.form.storage;

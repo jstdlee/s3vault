@@ -1,12 +1,15 @@
 #include "util/subprocess.h"
 
-#include <fcntl.h>
+#include "util/compat.h"
+
+#ifndef _WIN32
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #include <cerrno>
 #include <chrono>
@@ -15,7 +18,9 @@
 
 #include "util/strings.h"
 
+#ifndef _WIN32
 extern char** environ;
+#endif
 
 namespace s3v {
 
@@ -49,6 +54,9 @@ bool read_all_fd(int fd, std::string& out, size_t max) {
         out.append(buf, size_t(n));
     }
 }
+
+#ifndef _WIN32
+const char* const kFd3Arg = "3";
 
 // Returns a CLOEXEC duplicate of fd that is >= 10, so dup2 onto 0..3 always clears CLOEXEC.
 static int high_fd(int fd) {
@@ -233,5 +241,7 @@ std::string find_executable(const std::string& name) {
     }
     return "";
 }
+
+#endif  // !_WIN32
 
 }  // namespace s3v

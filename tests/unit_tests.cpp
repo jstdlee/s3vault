@@ -1,5 +1,5 @@
 // Unit tests for the pure parts of the core (no network). Run: build/s3vault-tests
-#include <unistd.h>
+#include "util/compat.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +19,7 @@
 #include "util/strings.h"
 #include "util/subprocess.h"
 #include "vault/vault.h"
+#include "platform.h"
 
 using namespace s3v;
 
@@ -260,10 +261,24 @@ static void test_planner() {
     }
 }
 
+// Scratch directory for file tests (TEMP on Windows).
+static std::string scratch(const std::string& name) {
+#ifdef _WIN32
+    const char* t = getenv("TEMP");
+    std::string base = t && *t ? t : "C:/Windows/Temp";
+    for (auto& c : base)
+        if (c == '\\') c = '/';
+#else
+    std::string base = "/tmp";
+#endif
+    return base + "/" + name + "-" + std::to_string(process_id());
+}
+
 static void test_gpg() {
     Gpg g("auto");
     if (!g.available()) {
-        fprintf(stderr, "skip gpg tests (gpg not found)\n");
+        fprintf(stderr, "skip gpg tests (gpg not found%s)\n", g.version().empty() ? "" : (": " + g.version()).c_str());
+        CHECK(!getenv("S3VAULT_REQUIRE_GPG"));  // CI sets it: a missing gpg must fail there, not skip
         return;
     }
     std::string ct, pt;
@@ -290,7 +305,7 @@ static void test_gpg() {
     CryptoResult tr = g.decrypt_string(t, pt, "key-1");
     CHECK(!tr.ok());
     // File round trip with the strong S2K used for key.gpg
-    std::string dir = "/tmp/s3vault-test-" + std::to_string(getpid());
+    std::string dir = scratch("s3vault-test");
     mkdirs(dir);
     write_file_atomic(dir + "/in.txt", "file body", 0600);
     CHECK(g.encrypt_file(dir + "/in.txt", dir + "/out.gpg", "pw", true, false).ok());
@@ -304,7 +319,7 @@ static void test_config() {
     Config c;
     c.set("storage.bucket", "b1");
     c.set("sync.concurrency", "3");
-    std::string p = "/tmp/s3vault-cfg-" + std::to_string(getpid()) + ".ini";
+    std::string p = scratch("s3vault-cfg") + ".ini";
     CHECK(c.save(p));
     Config d;
     CHECK(d.load(p));
@@ -331,6 +346,62 @@ static void test_config() {
     CHECK(!resolve_endpoint(s, "sec", ep, err));
 }
 
+// File-system and libc behaviour the core relies on (and that compat_win.cpp / platform/windows provide on Windows).
+static void test_portability() {
+    std::string dir = scratch("s3vault-port");
+    CHECK(mkdirs(dir + "/a/b"));
+    CHECK(stat_path(dir + "/a/b", true).is_dir);
+    CHECK(write_file_atomic(dir + "/a/x.txt", "one", 0600));
+    CHECK(write_file_atomic(dir + "/a/x.txt", "two", 0600));  // replaces an existing file
+    std::string body;
+    CHECK(read_file(dir + "/a/x.txt", body) && body == "two");
+    CHECK(write_file_atomic(dir + "/a/y.txt", "three\r\n\x1a binary", 0600));
+    CHECK(rename_replace(dir + "/a/y.txt", dir + "/a/x.txt"));  // over an existing file
+    CHECK(read_file(dir + "/a/x.txt", body) && body == "three\r\n\x1a binary");  // no text-mode translation
+    FileStat st = stat_path(dir + "/a/x.txt");
+    CHECK(st.is_file && st.size == 15 && st.mtime_ns > 1600000000LL * 1000000000LL);
+    std::string uni = dir + "/a/\xe6\x97\xa5\xe8\xae\xb0 caf\xc3\xa9.txt";  // "日记 café.txt"
+    CHECK(write_file_atomic(uni, "utf8", 0600));
+    CHECK(stat_path(uni).is_file);
+    CHECK(!real_path(dir + "/a/../a").empty() && real_path(dir + "/a/../a").find("..") == std::string::npos);
+    CHECK(real_path(dir + "/missing").empty());
+    remove_tree(dir);
+    CHECK(!stat_path(dir).exists);
+
+    CHECK(fnmatch("*.tmp", "a.tmp", 0) == 0);
+    CHECK(fnmatch("*.tmp", "d/a.tmp", FNM_PATHNAME) != 0);
+    CHECK(fnmatch("build/*", "build/x", FNM_PATHNAME) == 0);
+    CHECK(fnmatch("build/*", "build/x/y", FNM_PATHNAME) != 0);
+    CHECK(fnmatch("file?.[ch]", "file1.c", 0) == 0 && fnmatch("file?.[!ch]", "file1.c", 0) != 0);
+    struct tm tmv = {};
+    CHECK(strptime("Wed, 21 Oct 2015 07:28:00 GMT", "%a, %d %b %Y %H:%M:%S", &tmv) != nullptr);
+    CHECK(timegm(&tmv) == 1445412480);
+    tmv = {};
+    CHECK(strptime("20240102T030405Z", "%Y%m%dT%H%M%SZ", &tmv) != nullptr && timegm(&tmv) == 1704164645);
+
+    // Child process I/O: stdin → stdout round trip with binary data.
+    std::string out;
+#ifdef _WIN32
+    std::vector<std::string> cat = {"findstr", "^"};  // echoes stdin lines
+    CHECK(run_capture(cat, "hello\r\n", &out, nullptr, 1 << 20, 10000) == 0 && out.find("hello") != std::string::npos);
+    CHECK(run_capture({"cmd", "/c", "exit 3"}, "", nullptr, nullptr, 1 << 10, 10000) == 3);
+#else
+    CHECK(run_capture({"cat"}, std::string("a\0b\r\n", 5), &out, nullptr, 1 << 20, 10000) == 0 && out == std::string("a\0b\r\n", 5));
+    CHECK(run_capture({"sh", "-c", "exit 3"}, "", nullptr, nullptr, 1 << 10, 10000) == 3);
+#endif
+    CHECK(run_capture({"no-such-program-s3v"}, "", nullptr, nullptr, 1 << 10, 1000) < 0);
+
+    // Keychain round trip (where a keychain exists).
+    if (platform::keychain_available() && getenv("S3VAULT_TEST_KEYCHAIN")) {
+        SecureString v;
+        CHECK(platform::keychain_store("unit-test", "s3cret", 0));
+        CHECK(platform::keychain_load("unit-test", v) && v.view() == "s3cret");
+        CHECK(platform::keychain_store("unit-test", "old", 1));  // expired
+        CHECK(!platform::keychain_load("unit-test", v));
+        platform::keychain_erase("unit-test");
+    }
+}
+
 int main() {
     test_hashes();
     test_sigv4();
@@ -341,6 +412,7 @@ int main() {
     test_planner();
     test_gpg();
     test_config();
+    test_portability();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

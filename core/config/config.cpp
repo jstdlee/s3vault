@@ -1,6 +1,9 @@
 #include "config/config.h"
 
-#include <unistd.h>
+#include "util/compat.h"
+#ifdef _WIN32
+#include "util/win_text.h"
+#endif
 
 #include <cstdlib>
 #include <sstream>
@@ -132,13 +135,23 @@ bool Config::save(const std::string& path) const {
 
 std::string Config::device() const {
     if (!sync.device_name.empty()) return sync.device_name;
+#ifdef _WIN32
+    wchar_t w[256] = {};
+    DWORD n = 255;
+    std::string h = GetComputerNameExW(ComputerNamePhysicalDnsHostname, w, &n) ? from_wide(w, int(n)) : "";
+    return h.empty() ? "device" : h;
+#else
     char h[256] = {};
     gethostname(h, sizeof h - 1);
     return h[0] ? h : "device";
+#endif
 }
 
 std::string config_dir() {
     if (const char* h = getenv("S3VAULT_HOME"); h && *h) return h;
+#ifdef _WIN32
+    if (const wchar_t* a = _wgetenv(L"APPDATA"); a && *a) return slashes(from_wide(a)) + "/s3vault";
+#endif
     const char* x = getenv("XDG_CONFIG_HOME");
     return std::string(x && *x ? x : (home_dir() + "/.config")) + "/s3vault";
 }
@@ -147,6 +160,9 @@ std::string config_path() { return config_dir() + "/config.ini"; }
 
 std::string data_dir() {
     if (const char* h = getenv("S3VAULT_HOME"); h && *h) return std::string(h) + "/data";
+#ifdef _WIN32
+    if (const wchar_t* a = _wgetenv(L"LOCALAPPDATA"); a && *a) return slashes(from_wide(a)) + "/s3vault";
+#endif
     const char* x = getenv("XDG_DATA_HOME");
     return std::string(x && *x ? x : (home_dir() + "/.local/share")) + "/s3vault";
 }

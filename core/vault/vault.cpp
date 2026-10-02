@@ -1,8 +1,6 @@
 #include "vault/vault.h"
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "util/compat.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -403,7 +401,7 @@ OpResult Vault::download_to(const std::string& key, const std::string& dest, con
         }
     } else {
         r = s3_->get(key, [&](const char* p, size_t n) { return write_all_fd(fd, p, n); }, &etag);
-        fsync(fd);
+        sync_fd(fd);
         close(fd);
     }
     if (!r.ok()) {
@@ -418,7 +416,7 @@ OpResult Vault::download_to(const std::string& key, const std::string& dest, con
         return OpResult::fail("local file changed during download");
     }
     chmod(tmp.c_str(), 0644);
-    if (::rename(tmp.c_str(), dest.c_str()) != 0) {
+    if (!rename_replace(tmp, dest)) {
         unlink(tmp.c_str());
         return OpResult::fail("cannot replace " + dest);
     }
@@ -434,9 +432,9 @@ OpResult Vault::download_raw(const std::string& key, const std::string& dest) {
     if (fd < 0) return OpResult::fail("cannot write " + tmp);
     std::string etag;
     S3Result r = s3_->get(key, [&](const char* p, size_t n) { return write_all_fd(fd, p, n); }, &etag);
-    fsync(fd);
+    sync_fd(fd);
     close(fd);
-    if (!r.ok() || ::rename(tmp.c_str(), dest.c_str()) != 0) {
+    if (!r.ok() || !rename_replace(tmp, dest)) {
         unlink(tmp.c_str());
         return OpResult::fail("download " + key + ": " + r.describe());
     }

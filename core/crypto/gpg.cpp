@@ -1,7 +1,6 @@
 #include "crypto/gpg.h"
 
-#include <fcntl.h>
-#include <unistd.h>
+#include "util/compat.h"
 
 #include <thread>
 
@@ -11,9 +10,27 @@
 namespace s3v {
 
 Gpg::Gpg(const std::string& configured) {
-    std::string exe = find_executable(configured.empty() || configured == "auto" ? "gpg" : configured);
-    if (exe.empty() && (configured.empty() || configured == "auto")) exe = find_executable("gpg2");
+    bool automatic = configured.empty() || configured == "auto";
+    std::string exe;
+#ifdef _WIN32
+    // Gpg4win / GnuPG for Windows first: the gpg inside Git for Windows or MSYS2 is a POSIX-emulation build that
+    // cannot read the passphrase from an inherited Windows handle.
+    if (automatic)
+        for (const char* env : {"ProgramFiles(x86)", "ProgramFiles"})
+            if (const char* pf = getenv(env); pf && *pf && exe.empty()) exe = find_executable(std::string(pf) + "\\GnuPG\\bin\\gpg.exe");
+#endif
+    if (exe.empty()) exe = find_executable(automatic ? "gpg" : configured);
+    if (exe.empty() && automatic) exe = find_executable("gpg2");
     if (exe.empty()) return;
+#ifdef _WIN32
+    std::string lexe = to_lower(exe);
+    for (char& c : lexe)
+        if (c == '\\') c = '/';
+    if (lexe.find("/usr/bin/") != std::string::npos) {
+        version_ = "MSYS/Git build at " + exe + " is not supported; install Gpg4win";
+        return;
+    }
+#endif
     std::string out;
     if (run_capture({exe, "--version"}, "", &out, nullptr, 1 << 16, 5000) != 0) return;
     // "gpg (GnuPG) 2.4.4"
@@ -30,7 +47,7 @@ Gpg::Gpg(const std::string& configured) {
 
 std::vector<std::string> Gpg::base_args() const {
     return {exe_, "--batch", "--quiet", "--no-tty", "--no-greeting", "--no-symkey-cache",
-            "--pinentry-mode", "loopback", "--passphrase-fd", "3", "--status-fd", "2"};
+            "--pinentry-mode", "loopback", "--passphrase-fd", kFd3Arg, "--status-fd", "2"};
 }
 
 bool Gpg::is_compressed_ext(const std::string& e) {

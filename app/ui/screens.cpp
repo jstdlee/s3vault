@@ -93,8 +93,8 @@ void draw_setup(App& a) {
         } else {
             if (button("Create Vault", Btn::Primary, ImVec2(colw, 0), okpw && a.vault)) {
                 std::string pw = a.pw1;
-                explicit_bzero(a.pw1, sizeof a.pw1);
-                explicit_bzero(a.pw2, sizeof a.pw2);
+                secure_zero(a.pw1, sizeof a.pw1);
+                secure_zero(a.pw2, sizeof a.pw2);
                 auto v = a.vault;
                 a.modal_busy = true;
                 a.modal_error.clear();
@@ -184,7 +184,7 @@ void draw_lock_screen(App& a) {
     bool go = button(a.lock_busy ? "Checking…" : "Unlock", Btn::Primary, ImVec2(colw, ImGui::GetFrameHeight() + 6), a.lock_pw[0] && !a.lock_busy);
     if ((go || (enter && a.lock_pw[0])) && !a.lock_busy && a.vault) {
         std::string pw = a.lock_pw;
-        explicit_bzero(a.lock_pw, sizeof a.lock_pw);
+        secure_zero(a.lock_pw, sizeof a.lock_pw);
         a.lock_busy = true;
         auto v = a.vault;
         a.run_job([&a, v, pw]() mutable {

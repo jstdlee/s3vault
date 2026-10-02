@@ -27,6 +27,8 @@ private:
     size_t n_ = 0, cap_ = 0;
 };
 
+// Zero memory in a way the compiler may not optimise away.
+void secure_zero(void* p, size_t n);
 // Overwrite a std::string's buffer before dropping it.
 void wipe(std::string& s);
 // Cryptographically random bytes (getrandom).

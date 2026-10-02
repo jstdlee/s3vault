@@ -1,13 +1,13 @@
-# Windows backend (reserved)
+# Windows backend
 
-Implement `platform/iface/platform.h` here:
+Implements `platform/iface/platform.h` with Win32:
 
-- `fs_watcher_win.cpp`: ReadDirectoryChangesW (FILE_NOTIFY_CHANGE_FILE_NAME|DIR_NAME|SIZE|LAST_WRITE) per root;
-  ERROR_NOTIFY_ENUM_DIR → overflow.
-- `keychain_wincred.cpp`: Credential Manager (CredWriteW/CredReadW), or DPAPI-protected file.
-- `session_tmp.cpp`: `%LOCALAPPDATA%\s3vault\tmp\<pid>` with a restrictive ACL; scrub before delete.
-- `desktop.cpp`: ShellExecuteW, IFileOpenDialog, SHFileOperation (FOF_ALLOWUNDO) for the recycle bin.
-- `core/util/subprocess.cpp` needs a CreateProcess variant (passphrase via an inherited pipe handle instead of fd 3;
-  gpg accepts `--passphrase-fd <handle>` on Windows).
+- `fs_watcher_win.cpp`: ReadDirectoryChangesW per synced folder (recursive); a lost-event buffer means rescan.
+- `keychain_wincred.cpp`: Credential Manager (generic credentials `s3vault:<account>`, DPAPI-protected, not roaming).
+- `session_tmp.cpp`: `%LOCALAPPDATA%\s3vault\tmp\<pid>`; files are overwritten before delete (no tmpfs on Windows).
+- `desktop.cpp`: recycle bin (SHFileOperation + FOF_ALLOWUNDO), IFileOpenDialog / IFileSaveDialog.
+- `s3vault.manifest`: UTF-8 active code page (so narrow CRT file APIs take UTF-8 paths), per-monitor DPI awareness.
+- Child processes: `core/util/subprocess_win.cpp` (CreateProcessW, inherited-handle allow-list). gpg gets the
+  passphrase on an inherited pipe handle whose number is passed as `--passphrase-fd`.
 
-gpg: Gpg4win. libcurl: bundled DLL or vcpkg.
+Runtime: Gpg4win (or GnuPG for Windows) ≥ 2.2. libcurl and its DLLs ship next to the executables.

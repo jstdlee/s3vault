@@ -1,12 +1,14 @@
-// s3vault desktop (Linux): GLFW + OpenGL 3.3 + Dear ImGui, same stack as gpu-hud.
+// s3vault desktop (Linux, Windows): GLFW + OpenGL 3.3 + Dear ImGui, same stack as gpu-hud.
 #include "backends/imgui_impl_opengl3_loader.h"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <signal.h>
 #include <strings.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -23,9 +25,13 @@
 #include "imgui.h"
 #include "platform.h"
 #include "store/curl_dl.h"
+#include "util/compat.h"
 #include "util/fs.h"
 #include "util/strings.h"
 #include "util/subprocess.h"
+#ifdef _WIN32
+#include "util/win_text.h"
+#endif
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -148,6 +154,21 @@ static std::string script_step(Script& s, ui::App& a) {
     return "";
 }
 
+#ifdef _WIN32
+// Windows: the fonts every Windows 10/11 install has (Segoe UI, Microsoft YaHei for CJK, Consolas).
+static std::string fc_match(const char* pattern) {
+    const wchar_t* w = _wgetenv(L"WINDIR");
+    std::string dir = (w && *w ? slashes(from_wide(w)) : std::string("C:/Windows")) + "/Fonts/";
+    std::string pat = pattern;
+    std::vector<const char*> files;
+    if (pat.find("lang=zh") != std::string::npos) files = {"msyh.ttc", "simsun.ttc", "YuGothR.ttc", "malgun.ttf"};
+    else if (pat == "monospace") files = {"consola.ttf", "cour.ttf"};
+    else files = {"segoeui.ttf", "arial.ttf"};
+    for (const char* f : files)
+        if (stat_path(dir + f, true).is_file) return dir + f;
+    return "";
+}
+#else
 static std::string fc_match(const char* pattern) {
     std::string out;
     if (run_capture({"fc-match", "-f", "%{file}", pattern}, "", &out, nullptr, 4096, 3000) != 0) return "";
@@ -156,12 +177,19 @@ static std::string fc_match(const char* pattern) {
     if (!stat_path(out, true).is_file || (e != "ttf" && e != "otf" && e != "ttc")) return "";
     return out;
 }
+#endif
 
 static std::string icon_font_path() {
+#ifdef _WIN32
+    wchar_t exe[32768] = {};
+    DWORD n = GetModuleFileNameW(nullptr, exe, 32768);
+    std::string dir = n > 0 ? path_dirname(slashes(from_wide(exe, int(n)))) : ".";
+#else
     char exe[4096] = {};
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     std::string dir = n > 0 ? path_dirname(std::string(exe, size_t(n))) : ".";
-    for (std::string p : {dir + "/../share/s3vault/fonts/fa-solid-900.ttf", std::string(S3V_FONT_DIR) + "/fa-solid-900.ttf",
+#endif
+    for (std::string p : {dir + "/fonts/fa-solid-900.ttf", dir + "/../share/s3vault/fonts/fa-solid-900.ttf", std::string(S3V_FONT_DIR) + "/fa-solid-900.ttf",
                           std::string(S3V_FONT_DIR_BUILD) + "/fa-solid-900.ttf", dir + "/fa-solid-900.ttf"})
         if (stat_path(p, true).is_file) return p;
     return "";
@@ -219,6 +247,7 @@ static void build_fonts() {
     }
 }
 
+#ifndef _WIN32
 // The NVIDIA GL driver segfaults on the first draw when it cannot allocate a graphics context (e.g. a
 // local LLM holds most of the GB10's unified memory). The GUI therefore runs in a child process; if that
 // child dies from a signal before its first frame reached the screen, we start again with Mesa's
@@ -262,6 +291,11 @@ static void guard_gpu_start(int argc, char** argv) {
     }
     _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
 }
+#else
+static int g_ready_fd = -1;
+static void use_software_gl() {}
+static void guard_gpu_start(int, char**) {}
+#endif
 
 int main(int argc, char** argv) {
     bool software = getenv("S3VAULT_SOFTWARE_GL") != nullptr;
@@ -273,7 +307,7 @@ int main(int argc, char** argv) {
     Script script;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
-        if (a == "--home" && i + 1 < argc) setenv("S3VAULT_HOME", argv[++i], 1);
+        if (a == "--home" && i + 1 < argc) set_env("S3VAULT_HOME", argv[++i]);
         else if (a == "--script" && i + 1 < argc) script.steps = split(argv[++i], ';');
         else if (a == "--software") {}
         else if (a == "-h" || a == "--help") {

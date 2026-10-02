@@ -1,6 +1,8 @@
-// Child processes with pipes (gpg, pdftoppm, editors, dialogs). posix_spawn based.
+// Child processes with pipes (gpg, pdftoppm). posix_spawn on POSIX, CreateProcess on Windows (subprocess_win.cpp).
 #pragma once
 #include <sys/types.h>
+
+#include <cstdint>
 
 #include <string>
 #include <vector>
@@ -14,13 +16,23 @@ struct SpawnOpts {
     bool pipe_stderr = false;  // child stderr → parent reads
     int stdin_fd = -1;         // or redirect stdin from this fd (not closed by spawn)
     int stdout_fd = -1;        // or redirect stdout to this fd
-    std::string fd3_data;      // if set: child gets it on fd 3 (a pipe, fully written then closed)
+    std::string fd3_data;      // if set: child gets it on fd 3 (a pipe, fully written then closed); on Windows an
+                               // inherited pipe handle whose number replaces any argv entry equal to kFd3Arg
     bool has_fd3 = false;
     bool detach = false;       // new session; not waited for (external viewers/editors)
 };
 
+// The argv value naming the extra descriptor (e.g. "--passphrase-fd", kFd3Arg): "3" on POSIX.
+extern const char* const kFd3Arg;
+
+#ifdef _WIN32
+using proc_id = intptr_t;  // process HANDLE
+#else
+using proc_id = pid_t;
+#endif
+
 struct Proc {
-    pid_t pid = -1;
+    proc_id pid = -1;
     int in = -1, out = -1, err = -1;
 };
 

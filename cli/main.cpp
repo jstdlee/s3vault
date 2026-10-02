@@ -1,6 +1,9 @@
 // s3vault-cli — headless client: setup, vault init/unlock, tracked folders, sync, vault file operations.
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <termios.h>
-#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -23,6 +26,7 @@
 #include "util/secure.h"
 #include "util/sha256.h"
 #include "util/strings.h"
+#include "util/compat.h"
 #include "util/subprocess.h"
 #include "vault/vault.h"
 
@@ -77,6 +81,19 @@ struct Ctx {
 std::string read_password(const std::string& prompt) {
     if (const char* p = getenv("S3VAULT_PASSWORD"); p && *p) return p;
     fprintf(stderr, "%s", prompt.c_str());
+#ifdef _WIN32
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD old = 0;
+    bool tty = GetConsoleMode(in, &old) != 0;
+    if (tty) SetConsoleMode(in, old & ~DWORD(ENABLE_ECHO_INPUT));
+    std::string pw;
+    std::getline(std::cin, pw);
+    if (!pw.empty() && pw.back() == '\r') pw.pop_back();
+    if (tty) {
+        SetConsoleMode(in, old);
+        fprintf(stderr, "\n");
+    }
+#else
     termios old{};
     bool tty = isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old) == 0;
     if (tty) {
@@ -90,6 +107,7 @@ std::string read_password(const std::string& prompt) {
         tcsetattr(STDIN_FILENO, TCSANOW, &old);
         fprintf(stderr, "\n");
     }
+#endif
     return pw;
 }
 
@@ -266,8 +284,12 @@ void print_entries(std::vector<RemoteEntry> es, const std::string& sort, bool re
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);  // file names are UTF-8 (see platform/windows/s3vault.manifest)
+    SetConsoleCP(CP_UTF8);
+#endif
     std::vector<std::string> a(argv + 1, argv + argc);
-    if (std::string h = flag(a, "--home"); !h.empty()) setenv("S3VAULT_HOME", h.c_str(), 1);
+    if (std::string h = flag(a, "--home"); !h.empty()) set_env("S3VAULT_HOME", h.c_str());
     if (a.empty() || a[0] == "-h" || a[0] == "--help" || a[0] == "help") {
         printf("%s", kUsage);
         return a.empty() ? 1 : 0;
@@ -468,7 +490,11 @@ int main(int argc, char** argv) {
         eng.on_synced = [&] { printf("[%s] %s\n", format_local_time(time(nullptr)).c_str(), eng.last_summary().c_str()); fflush(stdout); };
         eng.start();
         printf("Watching (Ctrl-C to stop)…\n");
+#ifdef _WIN32
+        for (;;) Sleep(INFINITE);
+#else
         for (;;) pause();
+#endif
     }
 
     // ---- vault file operations ----

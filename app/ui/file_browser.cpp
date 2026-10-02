@@ -1,5 +1,8 @@
 // Built-in file/folder picker. External dialogs (zenity/kdialog) have no transient parent, so GNOME
 // opens them behind the s3vault window; an in-window browser avoids that and works the same everywhere.
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -50,7 +53,22 @@ Browser& B() {
     return b;
 }
 
+#ifdef _WIN32
+// Windows: "/" is a virtual "Computer" folder listing the drives; a drive root is "C:/".
+static bool drive_root(const std::string& d) { return d.size() == 3 && d[1] == ':' && d[2] == '/'; }
+std::string join(const std::string& dir, const std::string& name) {
+    if (dir == "/") return name + "/";
+    return dir.back() == '/' ? dir + name : dir + "/" + name;
+}
+static std::string up(const std::string& d) {
+    if (d == "/" || drive_root(d)) return "/";
+    std::string p = path_dirname(d);
+    return p.empty() ? "/" : (p.size() == 2 && p[1] == ':') ? p + "/" : p;
+}
+#else
 std::string join(const std::string& dir, const std::string& name) { return dir == "/" ? "/" + name : dir + "/" + name; }
+static std::string up(const std::string& d) { return path_dirname(d).empty() ? "/" : path_dirname(d); }
+#endif
 
 void list(Browser& b) {
     b.items.clear();
@@ -58,6 +76,14 @@ void list(Browser& b) {
     b.anchor = -1;
     b.error.clear();
     b.confirm_overwrite.clear();
+#ifdef _WIN32
+    if (b.cwd == "/") {
+        for (char c = 'A'; c <= 'Z'; c++)
+            if (GetLogicalDrives() & (1u << (c - 'A'))) b.items.push_back({std::string(1, c) + ":", true, 0, 0});
+        snprintf(b.path_buf, sizeof b.path_buf, "%s", "/");
+        return;
+    }
+#endif
     DIR* d = opendir(b.cwd.c_str());
     if (!d) {
         b.error = std::string("cannot open folder: ") + strerror(errno);
@@ -79,9 +105,18 @@ void list(Browser& b) {
 }
 
 void go(Browser& b, std::string dir) {
+#ifdef _WIN32
+    for (auto& c : dir)
+        if (c == '\\') c = '/';
+    while (dir.size() > 1 && dir.back() == '/' && !drive_root(dir)) dir.pop_back();
+    if (dir.size() == 2 && dir[1] == ':') dir += '/';
+    if (dir.empty()) dir = "/";
+    if (dir != "/" && !stat_path(dir, true).is_dir) {
+#else
     while (dir.size() > 1 && dir.back() == '/') dir.pop_back();
     if (dir.empty()) dir = "/";
     if (!stat_path(dir, true).is_dir) {
+#endif
         b.error = "not a folder: " + dir;
         return;
     }
@@ -140,7 +175,7 @@ void draw_file_browser(App& a) {
     }
 
     // Toolbar: up, home, editable path, hidden files.
-    if (icon_button(ICON_FA_ARROW_UP, "Enclosing folder  (Backspace)", false, true, ImGui::GetFrameHeight())) go(b, path_dirname(b.cwd).empty() ? "/" : path_dirname(b.cwd));
+    if (icon_button(ICON_FA_ARROW_UP, "Enclosing folder  (Backspace)", false, true, ImGui::GetFrameHeight())) go(b, up(b.cwd));
     ImGui::SameLine();
     if (icon_button(ICON_FA_HOUSE, "Home", false, true, ImGui::GetFrameHeight())) go(b, home_dir());
     ImGui::SameLine();
@@ -149,7 +184,7 @@ void draw_file_browser(App& a) {
         std::string p = trim(b.path_buf);
         if (starts_with(p, "~")) p = home_dir() + p.substr(1);
         FileStat st = stat_path(p, true);
-        if (st.is_dir) go(b, p);
+        if (st.is_dir || p == "/") go(b, p);
         else if (st.is_file && b.mode == BrowseMode::OpenMany) accept(b, {p});
         else if (b.mode == BrowseMode::Save && stat_path(path_dirname(p), true).is_dir) {
             snprintf(b.name_buf, sizeof b.name_buf, "%s", path_basename(p).c_str());
@@ -177,6 +212,10 @@ void draw_file_browser(App& a) {
     place(ICON_FA_DOWNLOAD, "Downloads", h + "/Downloads");
     place(ICON_FA_FILE_IMAGE, "Pictures", h + "/Pictures");
     place(ICON_FA_HARD_DRIVE, "Computer", "/");
+#ifdef _WIN32
+    for (char c = 'A'; c <= 'Z'; c++)
+        if (GetLogicalDrives() & (1u << (c - 'A'))) place(ICON_FA_HARD_DRIVE, (std::string(1, c) + ":").c_str(), std::string(1, c) + ":/");
+#else
     // Mounted drives
     const char* user = getenv("USER");
     for (std::string base : {std::string("/media/") + (user ? user : ""), std::string("/run/media/") + (user ? user : ""), std::string("/mnt")}) {
@@ -186,6 +225,7 @@ void draw_file_browser(App& a) {
             closedir(d);
         }
     }
+#endif
     ImGui::EndChild();
     ImGui::SameLine();
 
@@ -245,7 +285,7 @@ void draw_file_browser(App& a) {
         }
         ImGui::EndTable();
     }
-    if (!ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Backspace)) nav_to = path_dirname(b.cwd).empty() ? "/" : path_dirname(b.cwd);
+    if (!ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Backspace)) nav_to = up(b.cwd);
 
     if (!b.error.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", b.error.c_str());
 

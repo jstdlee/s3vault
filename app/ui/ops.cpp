@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "app.h"
+#include "util/compat.h"
 #include "platform.h"
 #include "util/fs.h"
 #include "util/secure.h"
