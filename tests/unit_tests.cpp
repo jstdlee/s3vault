@@ -403,6 +403,18 @@ static void test_portability() {
     }
 }
 
+static void test_key_check() {
+    std::string k1 = Vault::new_vault_key(), k2 = Vault::new_vault_key();
+    CHECK_EQ(k1.size(), size_t(64));
+    CHECK(k1 != k2);
+    for (char c : k1) CHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+    // Stable per key, different between keys, and never contains the key.
+    CHECK_EQ(Vault::key_check_value(k1), Vault::key_check_value(k1));
+    CHECK(Vault::key_check_value(k1) != Vault::key_check_value(k2));
+    CHECK(Vault::key_check_value(k1).find(k1) == std::string::npos);
+    CHECK(starts_with(Vault::key_check_value(k1), "s3vault-key-check-v1\n"));
+}
+
 int main(int argc, char** argv) {
     // Child modes used by test_portability().
     if (argc >= 2 && !strcmp(argv[1], "--child-cat")) {
@@ -430,6 +442,7 @@ int main(int argc, char** argv) {
     test_planner();
     test_gpg();
     test_config();
+    test_key_check();
     test_portability();
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -91,6 +91,8 @@ const std::vector<Feature>& features() {
         {ICON_FA_KEY, "Change Vault Password", "Action", "passphrase password security",
          [](App& a) { a.modal = a.vault_has_key ? "change-password" : "set-password"; }},
         {ICON_FA_FILE_EXPORT, "Export Key", "Action", "backup recovery key file", [](App& a) { a.modal = "export-key"; }},
+        {ICON_FA_ARROWS_ROTATE, "Replace Vault Key", "Action", "rotate rotation re-encrypt leaked compromised new key",
+         [](App& a) { if (a.vault_has_key) open_rotation(a); }},
         {ICON_FA_DOWNLOAD, "Download everything", "Action", "backup decrypted export all", [](App& a) { start_download_all(a, true); }},
         {ICON_FA_BOX_ARCHIVE, "Download everything, as stored", "Action", "backup encrypted export all",
          [](App& a) { start_download_all(a, false); }},

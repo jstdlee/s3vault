@@ -372,6 +372,16 @@ void Engine::exec_one(const RootRow& root, const PlanInput& in, const Action& a,
                 rep.unchanged++;
                 return;
             }
+            if (bi != in.base.end() && !row.base_hash.empty() && h == row.base_hash && in.direction != "download-only") {
+                // The server copy has the content we last synced, under a new ETag (re-encrypted by a vault key
+                // replacement, or uploaded again unchanged): only the local side changed, so upload it.
+                Action up = a;
+                up.kind = ActKind::Upload;
+                up.if_match = r.etag.empty() ? ri->second.etag : r.etag;
+                up.if_none_match = false;
+                exec_one(root, in, up, rep, conflicts, mu);
+                return;
+            }
             add_conflict(a.conflict_kind);
             return;
         }

@@ -49,6 +49,8 @@ struct OpResult {
     bool bad_key = false;              // wrong password / vault key
     bool locked = false;               // vault key needed but locked
     bool too_large = false;
+    bool rotating = false;             // a vault key replacement is unfinished (resume it with the new password)
+    bool paused = false;               // key replacement stopped on request; it can be resumed
     std::string error;
     std::string etag;        // new remote ETag (uploads) or ETag read (downloads)
     std::string plain_hash;  // SHA-256 of the plaintext moved
@@ -58,6 +60,37 @@ struct OpResult {
 };
 
 using Progress = std::function<void(uint64_t done, uint64_t total)>;
+
+// ---- vault key replacement ("rotation") ----
+// For when the old key may be known to someone else (a leaked password plus an old key.gpg, or a leaked
+// recovery key). A new random key replaces it and every encrypted object (vault and vault trash) is
+// downloaded, decrypted and re-encrypted with the new key. Crash-safe: the new key is stored first in
+// .s3vault/key-next.gpg (protected by the new password, together with the old key so the work can be
+// resumed with the new password alone) and .s3vault/rotation.json marks the vault as "being rotated" so
+// other devices drop the old key and stop writing with it. key.gpg is replaced only after every object
+// was re-encrypted. Plain (unencrypted) files are not touched.
+struct RotationStatus {
+    bool active = false;  // .s3vault/rotation.json exists
+    std::string device;   // who started it
+    int64_t started = 0;
+};
+
+struct RotationStats {
+    int files = 0;          // encrypted objects in the vault
+    int trash_files = 0;    // encrypted objects in the vault trash
+    int plain_files = 0;    // not encrypted: not touched
+    uint64_t bytes = 0;     // encrypted bytes to download and upload again (vault + trash)
+};
+
+struct RotationProgress {
+    int pass = 1;           // passes over the listing (later passes pick up objects changed meanwhile)
+    int done = 0, total = 0;
+    uint64_t bytes_done = 0, bytes_total = 0;
+    int already_new = 0;    // objects already encrypted with the new key (resumed run)
+    int unreadable = 0;     // objects neither key opens (left as they are)
+    std::string current;    // logical path being processed
+    bool finishing = false; // replacing key.gpg
+};
 
 class Vault {
 public:
@@ -96,6 +129,26 @@ public:
     bool try_unlock_from_keychain();
     void lock();
     bool unlocked() { return keys_.unlocked(); }
+
+    // ---- key replacement (see RotationStatus above) ----
+    static std::string new_vault_key();  // 64 hex characters; shown to the user as the new recovery key
+    // Short, non-secret fingerprint of a vault key (stored as .s3vault/key-check; lets every device tell
+    // whether the key it holds is still the vault's key).
+    static std::string key_check_value(std::string_view key);
+    OpResult rotation_status(RotationStatus& out);
+    OpResult rotation_stats(RotationStats& out);
+    // Starts a replacement: checks old_password against key.gpg, stores new_key (protected by
+    // new_password) and re-encrypts everything. `cancel` pauses (result.paused); resume_rotation()
+    // continues. The caller validates the new password's strength.
+    OpResult rotate_key(const std::string& old_password, const std::string& new_password, const std::string& new_key,
+                        const std::function<void(const RotationProgress&)>& progress = {},
+                        const std::atomic<bool>* cancel = nullptr);
+    OpResult resume_rotation(const std::string& new_password,
+                             const std::function<void(const RotationProgress&)>& progress = {},
+                             const std::atomic<bool>* cancel = nullptr);
+    // A message once the loaded key was dropped because the vault key was replaced (or is being replaced)
+    // on another device; "" otherwise. Reading clears it.
+    std::string take_key_notice();
     PassCache& keys() { return keys_; }
     Gpg& gpg() { return gpg_; }
     std::string vault_account() const;
@@ -132,7 +185,16 @@ public:
     std::string staging_dir() const;
 
 private:
+    static const char* key_magic();  // first line of the decrypted key.gpg
     OpResult need_key(SecureString& k);
+    // Drops the loaded key when the server says it is no longer (or soon no longer) the vault key.
+    void guard_key(bool rotation_marker, const std::string& check_etag);
+    bool key_is_current(std::string_view key, std::string* why);
+    void drop_key(const std::string& why);
+    OpResult run_rotation(const std::string& old_key, const std::string& new_key, const std::string& new_password,
+                          const std::function<void(const RotationProgress&)>& progress, const std::atomic<bool>* cancel);
+    OpResult rekey_object(const std::string& key, uint64_t size, const std::string& old_key, const std::string& new_key,
+                          bool& already_new, bool& unreadable, bool& changed, std::string& old_etag, std::string& new_etag);
     Config& cfg_;
     Db& db_;
     std::unique_ptr<S3Client> s3_;
@@ -141,6 +203,9 @@ private:
     std::string prefix_;
     bool has_key_ = false;
     std::string key_ct_;  // key.gpg ciphertext from the last unlock (safe to hold: it is encrypted)
+    std::atomic<bool> rotating_self_{false};  // this process is replacing the key: don't drop it
+    std::string check_etag_;                  // ETag of .s3vault/key-check last confirmed to match our key
+    std::string key_notice_;
     std::mutex mu_;
 };
 

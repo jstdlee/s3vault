@@ -139,6 +139,16 @@ void draw_settings_view(App& a) {
     if (prefs::action("Export key", "A backup of the key file, or the recovery key for your password manager", "Export…",
                       Btn::Secondary, ready && a.vault_has_key))
         a.modal = "export-key";
+    if (a.rot.server_active) {
+        std::string desc = a.rot.server_device.empty()
+                               ? std::string(tr("Not finished: other devices stay locked until it is"))
+                               : trf("Started on %s, not finished: other devices stay locked until it is", a.rot.server_device.c_str());
+        if (prefs::action("Finish key replacement", desc.c_str(), "Resume…", Btn::Primary, ready))
+            open_rotation_resume(a);
+    } else if (prefs::action("Replace vault key", "Only if the key may have leaked: re-encrypts every encrypted file "
+                             "with a new key and a new password", "Replace…", Btn::Destructive, ready && a.vault_has_key)) {
+        open_rotation(a);
+    }
     if (prefs::action("Forget the key now", "Encrypted files stop syncing until you unlock again", "Forget",
                       Btn::Destructive, a.vault && a.vault->unlocked()))
         forget_key(a);

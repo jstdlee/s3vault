@@ -17,6 +17,8 @@ namespace s3v {
 
 static const char* kKeyMagic = "s3vault-key-v1\n";
 
+const char* Vault::key_magic() { return kKeyMagic; }
+
 Vault::Vault(Config& cfg, Db& db) : cfg_(cfg), db_(db), gpg_(cfg.deps.gpg) {
     std::string p = cfg.storage.prefix;
     while (!p.empty() && p.front() == '/') p.erase(0, 1);
@@ -132,6 +134,7 @@ OpResult Vault::set_password(const std::string& old_password, const std::string&
     std::string vault_key, etag;
     Conditions c;
     std::string cur;
+    bool created = false;
     S3Result r = s3_->get(key_obj, [&](const char* p, size_t n) { cur.append(p, n); return cur.size() < (1 << 20); }, &etag);
     if (r.ok()) {
         // Change password: decrypt with the old one.
@@ -140,8 +143,9 @@ OpResult Vault::set_password(const std::string& old_password, const std::string&
         if (!d.ok() || !starts_with(vault_key, kKeyMagic)) return OpResult::fail("cannot read key.gpg: " + d.detail);
         c.if_match = etag;
     } else if (r.not_found()) {
-        vault_key = std::string(kKeyMagic) + to_hex(random_bytes(32)) + "\n";
+        vault_key = std::string(kKeyMagic) + new_vault_key() + "\n";
         c.if_none_match = true;
+        created = true;
     } else {
         return OpResult::fail("read key.gpg: " + r.describe());
     }
@@ -166,6 +170,11 @@ OpResult Vault::set_password(const std::string& old_password, const std::string&
     }
     std::string k = trim(vault_key.substr(strlen(kKeyMagic)));
     keys_.set(k);
+    if (created) {
+        // Lets other devices notice if the key is ever replaced (see guard_key).
+        S3Result kc = s3_->put_string(prefix_ + ".s3vault/key-check", key_check_value(k));
+        if (kc.ok()) { std::lock_guard<std::mutex> lk(mu_); check_etag_ = kc.etag; }
+    }
     wipe(k);
     wipe(vault_key);
     // A cached keychain copy stays valid (same vault key); nothing else to re-encrypt.
@@ -186,9 +195,21 @@ OpResult Vault::unlock(const std::string& password) {
         return f;
     }
     if (!d.ok() || !starts_with(vault_key, kKeyMagic)) return OpResult::fail("cannot read key.gpg: " + d.detail);
+    if (!rotating_self_) {
+        RotationStatus rs;
+        if (rotation_status(rs).ok && rs.active) {
+            wipe(vault_key);
+            OpResult f = OpResult::fail("The vault key is being replaced (started on " +
+                                        (rs.device.empty() ? std::string("another device") : rs.device) +
+                                        "). Finish the replacement with the NEW password, then unlock with it.");
+            f.rotating = true;
+            return f;
+        }
+    }
     {
         std::lock_guard<std::mutex> lk(mu_);
         key_ct_ = cur;
+        check_etag_.clear();  // re-checked against .s3vault/key-check on the next listing
     }
     std::string k = trim(vault_key.substr(strlen(kKeyMagic)));
     keys_.set(k);
@@ -243,6 +264,13 @@ bool Vault::try_unlock_from_keychain() {
     if (keys_.mode() != PassCache::Mode::Keychain) return false;
     SecureString s;
     if (!platform::keychain_load(vault_account(), s)) return false;
+    std::string why;
+    if (s3_ && !key_is_current(s.view(), &why)) {
+        platform::keychain_erase(vault_account());
+        std::lock_guard<std::mutex> lk(mu_);
+        key_notice_ = why;
+        return false;
+    }
     keys_.set(s.view());
     return true;
 }
@@ -273,6 +301,15 @@ OpResult Vault::refresh(std::vector<RemoteEntry>* out) {
     S3Result r = s3_->list_all(prefix_, objs);
     if (!r.ok()) return OpResult::fail("list: " + r.describe());
     db_.set_remote_cache(objs, int64_t(time(nullptr)));
+    {
+        bool marker = false;
+        std::string check_etag;
+        for (auto& o : objs) {
+            if (o.key == prefix_ + ".s3vault/rotation.json") marker = true;
+            else if (o.key == prefix_ + ".s3vault/key-check") check_etag = o.etag;
+        }
+        guard_key(marker, check_etag);
+    }
     if (out) {
         out->clear();
         for (auto& o : objs) {

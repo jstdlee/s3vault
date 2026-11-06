@@ -90,6 +90,22 @@ mindmap
   - **Lock**, manually or after N idle minutes, hides the window. The vault key stays loaded, so **sync keeps running**.
   - **Forget vault key** stops encrypted sync.
   - **Export** the password-protected key file, or the raw recovery key.
+  - **Replace vault key** (Settings › Security, or `s3vault-cli rotate-key`) — for when the key may have leaked: the
+    password leaked and an old `key.gpg` may exist (bucket versions, backups, exports), or the recovery key leaked.
+    Changing the password alone doesn't help then, because the vault key stays the same.
+    - A new random key re-encrypts every encrypted file in the vault and in the vault trash (download → decrypt →
+      encrypt → conditional upload), with a new password and a new recovery key. Plain files are not touched.
+    - Three confirmations before anything changes: what happens (with counts and size) → save the new recovery key and
+      type its last 8 characters → type ROTATE.
+    - Crash-safe and resumable: `.s3vault/key-next.gpg` (new key, protected by the new password) and
+      `.s3vault/rotation.json` are written first; `key.gpg` is replaced only after every file is done. Pause or
+      Ctrl-C at any time and finish with the new password (Settings › Finish key replacement, the lock screen, or
+      `rotate-key --resume`).
+    - Other devices drop the old key as soon as they see the rotation marker or a changed `.s3vault/key-check`, so they
+      never upload with it. They unlock again with the new password; a local edit made meanwhile is uploaded, not
+      turned into a conflict.
+    - Old object versions (bucket versioning), backups and "as stored" downloads still open with the old key: delete
+      them. `tests/rotation_local.sh` runs the whole flow against a local S3 server (moto).
 - **Mac-style interface.**
   - **No system title bar.** The top strip drags the window, a double-click maximizes it, and every edge resizes.
     Minimize, maximize and close sit at the top right.

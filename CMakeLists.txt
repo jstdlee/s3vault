@@ -53,7 +53,7 @@ add_library(s3vault_core STATIC
   core/crypto/gpg.cpp
   core/secret/strength.cpp core/secret/passcache.cpp
   core/index/db.cpp
-  core/vault/vault.cpp
+  core/vault/vault.cpp core/vault/rotate.cpp
   core/sync/ignore.cpp core/sync/planner.cpp core/sync/engine.cpp
   core/preview/preview.cpp
   core/edit/edit.cpp
@@ -102,7 +102,7 @@ if(S3VAULT_GUI)
 
   add_executable(s3vault app/desktop/main.cpp app/ui/app.cpp app/ui/theme.cpp app/ui/screens.cpp app/ui/files_view.cpp
   app/ui/views.cpp app/ui/settings_view.cpp app/ui/dialogs.cpp app/ui/ops.cpp app/ui/preview_view.cpp app/ui/file_browser.cpp
-  app/ui/editor_view.cpp app/ui/i18n.cpp app/ui/motion.cpp app/ui/window_chrome.cpp app/ui/palette.cpp app/ui/shell.cpp ${S3V_MANIFEST})
+  app/ui/editor_view.cpp app/ui/i18n.cpp app/ui/motion.cpp app/ui/window_chrome.cpp app/ui/palette.cpp app/ui/shell.cpp app/ui/rotate_view.cpp ${S3V_MANIFEST})
   if(WIN32)
     set_target_properties(s3vault PROPERTIES WIN32_EXECUTABLE ON)  # no console window behind the GUI
     target_link_libraries(s3vault PRIVATE opengl32)

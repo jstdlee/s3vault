@@ -171,6 +171,28 @@ struct App {
     std::string probe_report;
     bool probing = false;
 
+    // Vault key replacement wizard (rotate_view.cpp)
+    struct Rotation {
+        int step = 0;  // 0 impact · 1 passwords · 2 new recovery key · 3 final · 4 running · 5 finished · 10 resume form
+        bool ack = false;
+        bool stats_loading = false, stats_ok = false;
+        RotationStats stats;
+        std::string stats_error;
+        SecureString key;            // the new vault key, until the run starts
+        SecureString old_pw, new_pw;
+        bool key_saved = false;      // copied or saved to a file
+        char confirm[40] = "";       // last 8 characters of the new key, typed back
+        char go[16] = "";            // "ROTATE"
+        bool resume = false;         // finishing an earlier run
+        std::atomic<bool> cancel{false};
+        std::mutex mu;
+        RotationProgress progress;   // guarded by mu (written by the job)
+        OpResult result;
+        bool server_active = false;  // .s3vault/rotation.json exists
+        std::string server_device;
+        int64_t server_started = 0;
+    } rot;
+
     Toast toast;
     double last_input = 0;
     bool had_input = false;
@@ -243,6 +265,14 @@ void draw_edits_tab(App& a);
 void save_all_docs(App& a);
 // dialogs.cpp
 void draw_modals(App& a);
+// rotate_view.cpp — "Replace vault key" wizard (three confirmations), progress and resume
+void open_rotation(App& a);
+void open_rotation_resume(App& a);
+void draw_rotation_sheets(App& a);
+void check_rotation_state(App& a);  // re-reads .s3vault/rotation.json in the background
+void handle_key_notice(App& a);     // the vault dropped its key because another device replaced it
+// --script rotate:<open|step=N|run|resume> (screenshots and smoke tests; passwords from the environment)
+void rotation_script(App& a, const std::string& arg);
 bool strength_meter(const char* pw, int min_len);
 void password_pair(App& a, bool& acceptable);
 // ops.cpp — vault operations started from the UI

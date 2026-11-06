@@ -365,6 +365,8 @@ const Term kGlossary[] = {
     {"Direction", "How a synced folder syncs: both ways, back up only (upload), or mirror only (download)."},
     {"Keychain", "The system's password store. s3vault keeps the storage secret there, never in a file."},
     {"Key file", "key.gpg in the vault: the vault key, encrypted with your password."},
+    {"Key replacement", "A new vault key for every encrypted file, with a new password and recovery key. Only for a "
+                        "leaked key; to change the password alone, use Change Password."},
     {"Lock", "Hides the window until you unlock it; syncing keeps running."},
     {"Recovery key", "The raw vault key. With it and the key file, the vault opens even if the password is lost."},
     {"Synced folder", "A folder on this computer kept in sync with a folder in the vault."},

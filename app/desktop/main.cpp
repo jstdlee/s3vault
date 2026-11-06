@@ -42,7 +42,7 @@ static ui::App* g_app = nullptr;
 
 // --script "step;step;…" drives the UI for screenshots and smoke tests without synthetic input:
 //   lang:<en|zh|ja|ko>  palette:<query>  locate:<setting>  tab:<vault|folders|conflicts|transfers|edits|settings>  expand:<dir>  select:<path>  preview
-//   conflicts:all  compare  edit:<path>  type:<text>  save  lock  form:<key>=<value>  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
+//   rotate:<open|step=N|run|resume|pause>  conflicts:all  compare  edit:<path>  type:<text>  save  lock  form:<key>=<value>  upload:<local file>  browse:<files|folder|save>  unlock  reconnect  modal:<id>  sleep:<seconds>  idle  shot:<file.png>  quit
 struct Script {
     std::vector<std::string> steps;
     size_t i = 0;
@@ -153,6 +153,8 @@ static std::string script_step(Script& s, ui::App& a) {
             if (!list.empty()) { a.modal_arg = std::to_string(list[0].id); a.modal = "compare"; }
         } else if (cmd == "modal") {
             a.modal = arg;
+        } else if (cmd == "rotate") {  // rotate:<open|step=N|run|resume|pause>
+            ui::rotation_script(a, arg);
         } else if (cmd == "shot") {
             s.i++;
             s.wait_until = now + 0.3;  // let the next frames settle before the following step

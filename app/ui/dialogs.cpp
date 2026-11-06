@@ -127,11 +127,20 @@ void draw_modals(App& a) {
         sheet_title(ICON_FA_LOCK, P.dim, "Enter Vault Password", "Encrypted files need the vault key. Sync keeps running after you unlock.");
         bool enter = sheet_field("Password", a.pw1, sizeof a.pw1, "", true, true);
         sheet_status(a);
+        if (a.rot.server_active && button(ICON_FA_ARROWS_ROTATE "  Finish Key Replacement…", Btn::Plain)) {
+            close_sheet(a);
+            open_rotation_resume(a);
+        }
         int r = sheet_buttons("Unlock", "Cancel", a.pw1[0] && !a.modal_busy && v);
         if ((r == 1 || (enter && a.pw1[0])) && !a.modal_busy && v) {
             std::string pw = a.pw1;
             wipe_buf(a.pw1, sizeof a.pw1);
-            run_sheet_job(a, [v, pw]() mutable { OpResult x = v->unlock(pw); wipe(pw); return x; }, [&a] {
+            run_sheet_job(a, [&a, v, pw]() mutable {
+                OpResult x = v->unlock(pw);
+                wipe(pw);
+                if (x.rotating) a.post([&a] { check_rotation_state(a); });
+                return x;
+            }, [&a] {
                 a.tree_dirty = true;
                 a.browse_locked = false;
                 if (a.engine) a.engine->request_sync();
@@ -529,6 +538,8 @@ void draw_modals(App& a) {
         if (sheet_buttons(nullptr, "Done") == 2) close_sheet(a);
         sheet_end();
     }
+
+    draw_rotation_sheets(a);
 
     // ---- empty trash ----
     if (sheet_begin(a.modal, "empty-trash", 420)) {

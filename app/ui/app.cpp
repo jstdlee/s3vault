@@ -99,7 +99,7 @@ void connect_async(App& a) {
     a.vault = std::shared_ptr<Vault>(s, s->vault.get());
     a.engine = std::shared_ptr<Engine>(s, s->engine.get());
     a.edits = std::shared_ptr<EditManager>(s, s->edits.get());
-    a.engine->on_synced = [&a] { a.post([&a] { a.tree_dirty = true; }); };
+    a.engine->on_synced = [&a] { a.post([&a] { a.tree_dirty = true; handle_key_notice(a); }); };
     a.run_job([&a, s] {
         Vault* v = s->vault.get();
         std::string err;
@@ -121,8 +121,14 @@ void connect_async(App& a) {
         bool key = v->has_key();
         if (key) v->try_unlock_from_keychain();
         v->refresh();
-        a.post([&a, key, still_current] {
+        RotationStatus rs;
+        v->rotation_status(rs);
+        a.post([&a, key, rs, still_current] {
             if (!still_current()) return;
+            a.rot.server_active = rs.active;
+            a.rot.server_device = rs.device;
+            a.rot.server_started = rs.started;
+            handle_key_notice(a);
             a.vault_has_key = key;
             a.conn = App::Conn::Ready;
             a.tree_dirty = true;

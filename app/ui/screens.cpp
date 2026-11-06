@@ -201,6 +201,7 @@ void draw_lock_screen(App& a) {
                     if (a.engine) a.engine->request_sync();
                 } else {
                     a.lock_error = r.bad_key ? "Wrong password. Try again." : r.error;
+                    if (r.rotating) check_rotation_state(a);
                 }
             });
         });
@@ -209,7 +210,17 @@ void draw_lock_screen(App& a) {
         ImGui::Dummy(ImVec2(0, 2));
         float tw = ImGui::CalcTextSize(a.lock_error.c_str()).x;
         ImGui::SetCursorPosX(std::max(0.0f, (colw - tw) / 2));
+        ImGui::PushTextWrapPos(colw);
         ImGui::TextColored(P.red, "%s", a.lock_error.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    if (a.rot.server_active && need_key) {
+        ImGui::Dummy(ImVec2(0, 6));
+        const char* lbl = ICON_FA_ARROWS_ROTATE "  Finish Key Replacement…";
+        float bw = ImGui::CalcTextSize(tr(lbl)).x + 28;
+        ImGui::SetCursorPosX(std::max(0.0f, (colw - bw) / 2));
+        if (button(lbl, Btn::Secondary, ImVec2(bw, 0))) open_rotation_resume(a);
+        tip("Uses the NEW password chosen when the replacement started");
     }
     ImGui::Dummy(ImVec2(0, 14));
     // Sync status: no file content, so it may show while locked.

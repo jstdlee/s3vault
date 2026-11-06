@@ -13,7 +13,7 @@ using namespace s3v;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: it-helper wipe | put-raw <vault-rel-key> <file> | head <vault-rel-key>\n");
+        fprintf(stderr, "usage: it-helper wipe | put-raw <vault-rel-key> <file> | get-raw <vault-rel-key> <file> | head <vault-rel-key>\n");
         return 2;
     }
     Config cfg;
@@ -39,6 +39,12 @@ int main(int argc, char** argv) {
         read_file(argv[3], data);
         S3Result r = v.s3().put_string(v.prefix() + argv[2], data);
         return r.ok() ? 0 : 1;
+    }
+    if (cmd == "get-raw" && argc >= 4) {
+        std::string data;
+        S3Result r = v.s3().get_string(v.prefix() + argv[2], data, size_t(1) << 30);
+        if (!r.ok()) return 1;
+        return write_file_atomic(argv[3], data, 0600) ? 0 : 1;
     }
     if (cmd == "head" && argc >= 3) {
         ObjectInfo oi;

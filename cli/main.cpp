@@ -6,6 +6,8 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -47,6 +49,11 @@ Vault
   passwd                        set or change the vault password
   lock                          forget a remembered vault key (keychain mode)
   export-key <file> [--recovery]  save key.gpg (password-protected), or the raw recovery key (mode 600)
+  rotate-key --recovery-out <file> [--yes]
+                                replace the vault key and re-encrypt EVERY encrypted file (vault and trash).
+                                Only for a leaked key or old password + old key file. Asks three times.
+  rotate-key --resume           finish an interrupted or paused replacement (asks for the NEW password)
+  rotate-key --status           is a replacement in progress?
   gen-password                  print a strong random password
 
 Tracked folders
@@ -69,6 +76,7 @@ Environment
   S3VAULT_HOME         config+data dir (default ~/.config/s3vault, ~/.local/share/s3vault)
   S3VAULT_SECRET_KEY   S3 secret key (instead of the keychain)
   S3VAULT_PASSWORD     vault password (scripts/tests; otherwise prompted)
+  S3VAULT_NEW_PASSWORD new password for rotate-key (scripts/tests; otherwise prompted)
 )";
 
 struct Ctx {
@@ -78,8 +86,8 @@ struct Ctx {
     std::unique_ptr<Engine> engine;
 };
 
-std::string read_password(const std::string& prompt) {
-    if (const char* p = getenv("S3VAULT_PASSWORD"); p && *p) return p;
+std::string read_password(const std::string& prompt, bool use_env = true) {
+    if (const char* p = getenv("S3VAULT_PASSWORD"); use_env && p && *p) return p;
     fprintf(stderr, "%s", prompt.c_str());
 #ifdef _WIN32
     HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
@@ -175,6 +183,10 @@ bool ensure_unlocked(Ctx& c, bool required) {
         wipe(pw);
         if (u.ok) return true;
         fprintf(stderr, "%s\n", u.error.c_str());
+        if (u.rotating) {
+            fprintf(stderr, "Finish it with: s3vault-cli rotate-key --resume\n");
+            return false;
+        }
         if (!u.bad_key || getenv("S3VAULT_PASSWORD")) return false;
     }
     return false;
@@ -279,6 +291,216 @@ void print_entries(std::vector<RemoteEntry> es, const std::string& sort, bool re
             printf("%-10s %10s  %-16s  %s%s\n", file_type_label(e.logical), human_size(e.size).c_str(),
                    format_local_time(e.mtime).c_str(), e.logical.c_str(), e.encrypted ? "  [encrypted]" : "");
     }
+}
+
+// ---- rotate-key ---------------------------------------------------------------------------------
+
+std::atomic<bool> g_rotate_cancel{false};
+
+void on_rotate_sigint(int) { g_rotate_cancel = true; }
+
+bool interactive() {
+#ifdef _WIN32
+    DWORD mode = 0;
+    return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) != 0;
+#else
+    return isatty(STDIN_FILENO);
+#endif
+}
+
+std::string read_line(const std::string& prompt) {
+    fprintf(stderr, "%s", prompt.c_str());
+    std::string s;
+    std::getline(std::cin, s);
+    if (!s.empty() && s.back() == '\r') s.pop_back();
+    return trim(s);
+}
+
+// S3VAULT_NEW_PASSWORD (scripts), otherwise asked twice on the terminal. "" = give up.
+std::string ask_rotation_password(int min_len, const std::string& old) {
+    if (const char* p = getenv("S3VAULT_NEW_PASSWORD"); p && *p) {
+        std::string a = p;
+        Strength s = check_password(a, min_len);
+        if (!s.acceptable) { fprintf(stderr, "S3VAULT_NEW_PASSWORD is too weak.\n"); return ""; }
+        if (a == old) { fprintf(stderr, "The new password must be different from the current one.\n"); return ""; }
+        return a;
+    }
+    if (!interactive()) { fprintf(stderr, "Set S3VAULT_NEW_PASSWORD, or run in a terminal.\n"); return ""; }
+    for (int tries = 0; tries < 5; tries++) {
+        std::string a = read_password("New vault password: ", false);
+        Strength s = check_password(a, min_len);
+        if (!s.acceptable) {
+            fprintf(stderr, "Password too weak (score %d/4):\n", s.score);
+            for (auto& pr : s.problems) fprintf(stderr, "  - %s\n", pr.c_str());
+            fprintf(stderr, "Suggestion: %s\n", generate_password().c_str());
+            wipe(a);
+            continue;
+        }
+        if (a == old) {
+            fprintf(stderr, "The new password must be different from the current one.\n");
+            wipe(a);
+            continue;
+        }
+        std::string b = read_password("Repeat new password: ", false);
+        bool same = a == b;
+        wipe(b);
+        if (same) return a;
+        fprintf(stderr, "Passwords do not match.\n");
+        wipe(a);
+    }
+    return "";
+}
+
+void print_rotation_progress(const RotationProgress& p) {
+    if (p.finishing) {
+        fprintf(stderr, "\r\033[KReplacing key.gpg with the new key…");
+    } else {
+        int pct = p.bytes_total ? int(p.bytes_done * 100 / p.bytes_total) : 100;
+        std::string cur = p.current.size() > 48 ? "…" + p.current.substr(p.current.size() - 47) : p.current;
+        fprintf(stderr, "\r\033[K[%3d%%] %d/%d %s%s", pct, p.done, p.total, p.pass > 1 ? "(again: changed meanwhile) " : "",
+                cur.c_str());
+    }
+    fflush(stderr);
+}
+
+void print_after_rotation(const RotationProgress& last, const std::string& recovery_file) {
+    fprintf(stderr, "\n\nDone. The vault now uses the new key.\n");
+    if (last.already_new) fprintf(stderr, "  %d file(s) were already on the new key (resumed).\n", last.already_new);
+    if (last.unreadable)
+        fprintf(stderr, "  WARNING: %d file(s) could not be opened with the old or the new key and were left as they were.\n",
+                last.unreadable);
+    fprintf(stderr,
+            "\nNext steps:\n"
+            "  1. Other devices: unlock with the NEW password. They stopped using the old key.\n"
+            "  2. Delete everything that still holds the OLD key: old exports of key.gpg, the old recovery key,\n"
+            "     and \"download everything, as stored\" copies.\n"
+            "  3. If the bucket keeps old versions (versioning), delete the old versions of .gpg files and of\n"
+            "     .s3vault/key.gpg in your storage provider's console. s3vault cannot remove them.\n"
+            "  4. Export the new key file:  s3vault-cli export-key <file>\n");
+    if (!recovery_file.empty())
+        fprintf(stderr, "  5. Move the new recovery key (%s) to your password manager or paper, then delete the file.\n",
+                recovery_file.c_str());
+}
+
+int cmd_rotate_key(Ctx& c, std::vector<std::string>& a) {
+    Vault& v = *c.vault;
+    bool exists = false;
+    OpResult li = v.load_info(exists);
+    if (!li.ok || !exists) return die(li.ok ? "no vault here (run init)" : li.error);
+    if (!v.has_key()) return die("this vault has no password, so there is no key to replace");
+    RotationStatus rs;
+    OpResult st = v.rotation_status(rs);
+    if (!st.ok) return die(st.error);
+    signal(SIGINT, on_rotate_sigint);
+
+    if (has(a, "--status")) {
+        if (!rs.active) { printf("No key replacement in progress.\n"); return 0; }
+        printf("A key replacement is in progress: started on %s at %s.\nFinish it with: s3vault-cli rotate-key --resume\n",
+               rs.device.empty() ? "an unknown device" : rs.device.c_str(), format_local_time(rs.started).c_str());
+        return 0;
+    }
+
+    RotationProgress last;
+    auto progress = [&](const RotationProgress& p) { last = p; print_rotation_progress(p); };
+    auto finish = [&](const OpResult& r, const std::string& recovery_file) {
+        if (r.ok) { print_after_rotation(last, recovery_file); return 0; }
+        fprintf(stderr, "\n");
+        if (r.paused) {
+            fprintf(stderr, "Paused after %d of %d files. Nothing is lost: run  s3vault-cli rotate-key --resume  with the "
+                            "NEW password to finish. Until then other devices stay locked.\n", last.done, last.total);
+            return 3;
+        }
+        if (r.rotating) fprintf(stderr, "Not finished. Run  s3vault-cli rotate-key --resume  with the NEW password.\n");
+        return die(r.error);
+    };
+
+    if (has(a, "--resume")) {
+        if (!rs.active) {
+            OpResult r = v.resume_rotation("");  // removes a leftover key-next.gpg, if any
+            return die(r.error);
+        }
+        fprintf(stderr, "Resuming the key replacement started on %s at %s.\n",
+                rs.device.empty() ? "an unknown device" : rs.device.c_str(), format_local_time(rs.started).c_str());
+        std::string nw;
+        if (const char* p = getenv("S3VAULT_NEW_PASSWORD"); p && *p) nw = p;
+        else nw = read_password("NEW vault password (chosen when the replacement started): ", false);
+        OpResult r = v.resume_rotation(nw, progress, &g_rotate_cancel);
+        wipe(nw);
+        return finish(r, "");
+    }
+
+    if (rs.active)
+        return die("a key replacement started on " + (rs.device.empty() ? std::string("another device") : rs.device) +
+                   " is not finished; run: s3vault-cli rotate-key --resume");
+    std::string out = flag(a, "--recovery-out");
+    bool yes = has(a, "--yes");
+    if (out.empty())
+        return die("usage: rotate-key --recovery-out <file> [--yes]\n"
+                   "       The new recovery key is saved there (mode 600) before anything changes.");
+    if (!yes && !interactive()) return die("rotate-key asks for three confirmations: run it in a terminal, or pass --yes");
+
+    RotationStats stats;
+    OpResult sr = v.rotation_stats(stats);
+    if (!sr.ok) return die(sr.error);
+    int total = stats.files + stats.trash_files;
+    fprintf(stderr,
+            "\n== Replace the vault key ==========================================================\n"
+            "Use this only if the key may be known to someone else: your password leaked AND an old copy of\n"
+            "key.gpg may exist (bucket versions, backups, exports), or the recovery key leaked.\n"
+            "To just change the password, use  passwd  instead: it is instant and changes no files.\n\n"
+            "What happens:\n"
+            "  - %d encrypted file(s) (%d in the vault trash), %s, are downloaded, decrypted and uploaded\n"
+            "    again with a new random key. %d plain file(s) are not touched.\n"
+            "  - You choose a new password. The old password, the old recovery key and old copies of key.gpg\n"
+            "    stop opening anything that is re-encrypted.\n"
+            "  - Other devices stop syncing encrypted files at once and must unlock with the new password.\n"
+            "  - Interrupted or Ctrl-C: nothing is lost; finish with  rotate-key --resume  and the new password.\n"
+            "  - It can't be undone, and copies of old data elsewhere (bucket versions, backups) are not changed.\n",
+            total, stats.trash_files, human_size(stats.bytes).c_str(), stats.plain_files);
+    if (total == 0) fprintf(stderr, "\nThere are no encrypted files: only the key and the password change.\n");
+
+    // Confirmation 1 of 3: the impact.
+    if (!yes && read_line("\n[1/3] Type \"yes\" if you understand what will happen: ") != "yes")
+        return die("cancelled; nothing was changed");
+
+    std::string old;
+    if (const char* o = getenv("S3VAULT_OLD_PASSWORD"); o && *o) old = o;
+    else old = read_password("Current vault password: ");
+    OpResult chk = v.unlock(old);
+    if (!chk.ok) { wipe(old); return die(chk.bad_key ? "wrong current password" : chk.error); }
+    std::string nw = ask_rotation_password(c.cfg.security.min_length, old);
+    if (nw.empty()) { wipe(old); return die("cancelled; nothing was changed"); }
+
+    // Confirmation 2 of 3: the new recovery key is saved before anything changes.
+    std::string key = Vault::new_vault_key();
+    std::string text = "s3vault NEW recovery key (vault " + c.cfg.storage.bucket + "/" + v.prefix() + "), made " +
+                       format_local_time(time(nullptr)) + " by a key replacement.\n"
+                       "It replaces every earlier recovery key of this vault.\n"
+                       "Decrypt any file:  gpg -d <file>.gpg   and use this as the passphrase:\n" + key + "\n";
+    bool saved = write_file_atomic(out, text, 0600);
+    wipe(text);
+    if (!saved) { wipe(old); wipe(nw); wipe(key); return die("cannot write " + out + "; nothing was changed"); }
+    fprintf(stderr, "\nThe NEW recovery key was saved to %s (mode 600). Also save the NEW password in your password manager.\n",
+            out.c_str());
+    if (!yes) {
+        std::string tail = key.substr(key.size() - 8);
+        std::string typed = to_lower(read_line("[2/3] Open that file and type the LAST 8 characters of the new key: "));
+        bool ok = typed == tail;
+        wipe(tail);
+        if (!ok) { wipe(old); wipe(nw); wipe(key); return die("that does not match; nothing was changed"); }
+    }
+
+    // Confirmation 3 of 3: the final go.
+    if (!yes && read_line("[3/3] Type ROTATE to re-encrypt " + std::to_string(total) + " file(s) now: ") != "ROTATE") {
+        wipe(old); wipe(nw); wipe(key);
+        return die("cancelled; nothing was changed (the unused key file " + out + " can be deleted)");
+    }
+    fprintf(stderr, "\nRe-encrypting. Ctrl-C pauses safely.\n");
+    OpResult r = v.rotate_key(old, nw, key, progress, &g_rotate_cancel);
+    wipe(old);
+    wipe(nw);
+    wipe(key);
+    return finish(r, out);
 }
 
 }  // namespace
@@ -412,6 +634,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "saved the RECOVERY KEY to %s (mode 600). Anyone with it can decrypt this vault.\n", a[0].c_str());
         return 0;
     }
+    if (cmd == "rotate-key") return cmd_rotate_key(c, a);
     if (cmd == "lock") {
         v.lock();
         printf("Locked.\n");
