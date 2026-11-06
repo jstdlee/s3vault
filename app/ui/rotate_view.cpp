@@ -279,7 +279,7 @@ static void draw_passwords(App& a) {
         ImGui::TextColored(P.red, "%s", tr("The new password must be different from the current one."));
         ok = false;
     }
-    tip("Save the new password in your password manager now. Other devices need it to unlock.");
+    small_dim("%s", tr("Save the new password in your password manager now. Other devices need it to unlock."));
     if (a.modal_busy) {
         spinner(7, P.dim);
         ImGui::SameLine();
@@ -494,7 +494,7 @@ static void draw_resume_form(App& a) {
     sheet_title(ICON_FA_ARROWS_ROTATE, P.orange, "Finish Replacing the Vault Key", sub.c_str());
     sheet_field("New password (chosen when the replacement started)", a.pw1, sizeof a.pw1, "", true, true);
     if (!a.modal_error.empty()) ImGui::TextColored(P.red, "%s", a.modal_error.c_str());
-    tip("Files already re-encrypted are checked and skipped.");
+    small_dim("%s", tr("Files already re-encrypted are checked and skipped."));
     int b = sheet_buttons("Resume", "Cancel", a.pw1[0] != 0);
     if (b == 1) {
         r.new_pw.assign(a.pw1);

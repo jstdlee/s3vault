@@ -201,7 +201,10 @@ void draw_lock_screen(App& a) {
                     if (a.engine) a.engine->request_sync();
                 } else {
                     a.lock_error = r.bad_key ? "Wrong password. Try again." : r.error;
-                    if (r.rotating) check_rotation_state(a);
+                    if (r.rotating) {
+                        a.lock_error = tr("A key replacement isn't finished. Finish it with the NEW password.");
+                        check_rotation_state(a);
+                    }
                 }
             });
         });
