@@ -1,0 +1,27 @@
+name: securePail iOS crypto (CI scratch)
+
+# Temporary: builds and tests the securePail Swift package (securepail-ios/)
+# on a macOS runner until the securePail repository exists. Runs only for pushes
+# to this branch that touch the package, and on demand.
+on:
+  push:
+    branches: ["claude/securepail-readiness-check-numt1w"]
+    paths: ["securepail-ios/**", ".github/workflows/securepail-ios.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swift:
+    name: Swift package tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Build
+        run: swift build --package-path securepail-ios/SecurePailCrypto
+      - name: Test
+        run: swift test --package-path securepail-ios/SecurePailCrypto
