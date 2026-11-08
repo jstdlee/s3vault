@@ -1,0 +1,39 @@
+# Website deployment only; application validation and releases use GitHub Actions.
+labels:
+  platform: linux/amd64
+  backend: docker
+  role: netcup-vps500
+  server: netcup-vps500
+
+when:
+  - event: [push, manual]
+    branch: master
+
+clone:
+  - name: clone
+    image: woodpeckerci/plugin-git:2.10.1@sha256:550075c844fcec0af41d9d28f9860aa5d8c43e1e9419be4b9266dc02c2f29804
+
+steps:
+  - name: build-site
+    image: golang:1.27.3-bookworm@sha256:5c3e9b43cfd3bb95c7937462e29d87ada57b481a96fa23ad0eb61778d7a00110
+    environment:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    volumes:
+      - /var/cache/woodpecker/pail/go-mod:/go/pkg/mod
+      - /var/cache/woodpecker/pail/go-build:/root/.cache/go-build
+    commands:
+      - apt-get update && apt-get install -y --no-install-recommends jq
+      - sh scripts/build-site.sh
+
+  - name: publish-site
+    image: alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+    volumes:
+      - /var/www/pail.download:/deploy
+    commands:
+      - apk add --no-cache coreutils util-linux
+      - sh scripts/publish-site.sh public "$CI_COMMIT_SHA-$CI_PIPELINE_NUMBER-${CI_PIPELINE_RERUNS:-0}"
+
+concurrency:
+  limit: 1
+  group: pail-site-production

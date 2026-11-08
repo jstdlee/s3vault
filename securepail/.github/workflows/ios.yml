@@ -1,0 +1,25 @@
+name: iOS crypto
+
+# Builds the Swift package and runs its tests against the vectors the desktop
+# app wrote (internal/seclayer/testdata). Swift is only available on macOS runners.
+on:
+  push:
+    paths: ["ios/**", "internal/seclayer/testdata/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["ios/**", "internal/seclayer/testdata/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swift:
+    name: Swift package tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test
+        run: swift test --package-path ios/SecurePailCrypto

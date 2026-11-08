@@ -1,0 +1,189 @@
+# Changelog
+
+English | [简体中文](CHANGELOG.zh-CN.md)
+
+All notable changes to this project are documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+
+- Secure layer with a choice of suite. An upload rule can encrypt files on your computer before upload with **AES-256-GCM** (portable: no extra software, opens on desktop, iOS and Android; `.spe`) or **GPG** (standard OpenPGP, needs gpg; `.gpg`). `pail secure suites` compares them. Create and back up keys with `pail secure keygen`, `passphrase`, `export`, `recovery` and `import`; download with `--decode auto --secure-key REF`.
+- Secure sync. Two-way folder sync with an optional secure layer: it remembers each file's last synced state, so it can tell which side changed. Conflicts are listed and settled with keep both, use mine, use remote or newest; deleted files go to a remote trash you can restore from; `pail ssync edit` saves changes back safely and `pail ssync preview` shows encrypted files without writing them to disk. Use `pail ssync` or the **Secure sync** tool.
+- iOS. A Swift package, `ios/SecurePailCrypto`, reads and writes the portable AES-256-GCM files and key files.
+- Linux Arm (arm64) is built, tested and released alongside x64. On a machine without a desktop keychain, `pail secure` and `pail doctor` now unlock the encrypted vault, and the readiness check tells you to use it. macOS builds are no longer part of CI or releases.
+- Readiness check. `pail doctor` and the upload rules' **Check components** button test gpg (version and a real encrypt/decrypt round trip), gpg-agent, the key store and the temporary directory, and say how to fix each problem.
+- Quit when closed and idle. With the tray icon showing, turn on **Settings › Appearance › Quit when closed and idle** (or `pail settings quit-when-idle on`) and closing the window quits Pail when no transfer is running. While a transfer runs, closing the window still keeps Pail in the tray. It is off by default.
+
+## [0.5.0] - 2026-11-06
+
+### Added
+
+- Recent operations. Click the time in the status bar to open a list of the latest operations: loading the bucket list, opening a folder, uploads, downloads and deletes. Each line shows whether it succeeded, failed or was canceled, how long it took and when it ended. The status bar itself still shows the last successful one. The list is kept in memory and is empty again after you quit Pail. **Settings › Diagnostics** sets how many operations it keeps (100 by default, up to 1000) and whether it is kept when you switch account (by default it is cleared).
+- Accounts and the encrypted vault on the command line. `pail account` adds, edits, shows, tests and removes accounts. It asks for the secret access key without echo, or reads it from stdin with `--secret-stdin`, and never prints it. `pail vault` creates the encrypted vault, changes its master password, moves the secrets between the vault and the system keychain, and resets a vault whose password is forgotten.
+- Object commands on the command line. `pail stat` shows an object's properties, `pail cat` writes its bytes to stdout, `pail mkdir` creates a folder and `pail du` totals the size below a prefix. `pail tags`, `pail acl`, `pail props` and `pail storage-class` read and change tags, ACLs, headers, metadata and storage classes.
+- More administration on the command line. `pail bucket alias` sets a bucket's display name, `pail multipart` lists and aborts unfinished multipart uploads, `pail sync job` lists, adds and removes saved sync jobs, `pail cloudfront` lists distributions and invalidates paths, and `pail settings` reads and changes the desktop app's settings. `pail help COMMAND` prints the usage of one command.
+
+### Changed
+
+- Selecting every item of a folder with thousands of objects, and loading such a folder, no longer make the window stutter: the questions Pail asks about the selection on every redraw are answered without sorting it, and while a large folder is still loading the list is rebuilt a few times a second instead of after every page.
+
+### Removed
+
+- Automatic migration of data from Pail's name before its first release, `openS3`: the `openS3` configuration folder, the `openS3` keychain entries, `opens3-vault` vault files and `opens3-*` object metadata are no longer read. Releases of Pail never used that name.
+- `pail-desktop --demo` is no longer part of the release builds, which also makes the programs smaller. Developers still get it by building from source with `-tags pail_demo`.
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- Downloads from servers that ignore range requests, such as some NAS devices, no longer fail with "EOF" once the file is larger than one part. Pail now downloads such a file over a single connection.
+- Canceling a download from such a server shows "canceled" again, not the error "the service ignored the Range header".
+
+## [0.4.2] - 2026-11-05
+
+### Added
+
+- Bucket aliases. Right-click a bucket and choose Set alias… to show a name you recognise in the sidebar, the path bar and the command palette. The bucket is not renamed: the dialogs that act on a bucket, links and the command line keep its real name.
+- Proxy server. **Settings › Network** sends the requests of all accounts through a proxy: choose HTTP, HTTPS or SOCKS5, enter the host and port, and optionally a user name and password. The password is kept in the system keychain or the encrypted vault, with your other secrets. Addresses on your own computer connect directly. Leave it on From environment to use the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` environment variables as before. The command line uses the same setting.
+- The status bar shows how long the last operation took: loading the bucket list, opening a folder, an upload, a download or a delete.
+
+## [0.4.1] - 2026-11-04
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- Folder sizes: Calculate size and Calculate folder sizes were greyed out once a size had been calculated, so you could not measure a folder again after its content changed. They now stay available and measure the folder again.
+
+## [0.4.0] - 2026-11-02
+
+### Added
+
+- Folder sizes. S3 stores no size for a folder, so the Size column shows "–" until you calculate it. Right-click one or more folders and choose Calculate size, or use the Calculate folder sizes button in the toolbar to size every folder shown. The size counts the current objects under the folder; older versions, delete markers and incomplete multipart uploads are not counted. Very large folders take a while, and a failed calculation can be retried. The inspector shows the object count and size of a selected folder. Sorting by Size orders folders by their calculated size.
+- A tray icon: the notification area on Windows, the menu bar on macOS and the system tray on Linux. Closing the window hides it and Pail keeps running so transfers can finish; choose Quit Pail from the icon's menu to quit. The menu shows the transfer progress and offers Open Pail, Show transfers and Upload files. While the window is hidden, completion messages arrive as system notifications. Turn the icon off under Settings › Appearance to quit on close as before. On Linux the icon needs libayatana-appindicator3; without it, closing the window quits.
+- Starting Pail a second time, or clicking its Dock icon on macOS, brings the existing window back instead of opening another copy.
+
+### Changed
+
+- The window opens with its content already drawn on every platform.
+- The toolbar shows only icons when the window is narrow, including at the smallest window size.
+- macOS: lower CPU and power use while idle.
+- Windows 11: menu labels are no longer cut off at high display scaling.
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- macOS: the app icon is no longer larger than other apps' icons in the Dock and Finder.
+
+## [0.3.3] - 2026-10-31
+
+### Changed
+
+- Screen readers announce the Theme, Language and account choices in menus as a group of options with one selected, instead of as separate check boxes.
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- Windows: while you resize the window, its content no longer shows enlarged and cut off at the right and bottom, and newly exposed edges show the background colour instead of black.
+- Windows: with "Show accent colour on title bars and window borders" on, no accent strip appears at the top of the window.
+- Windows: short Chinese labels are no longer cut off with an ellipsis.
+- macOS: ⌘C, ⌘X, ⌘V and ⌘A copy, cut, paste and select objects when no text field has the focus.
+- macOS: the window no longer shakes while you drag it by the toolbar or the sidebar header.
+- Linux: closing the window with its own close button no longer crashes the app, and a quick touchpad tap no longer leaves the pointer stuck pressed.
+
+## [0.3.2] - 2026-10-26
+
+### Added
+
+- The object table has a check box on each row and a select-all box in its header. With two or more items selected, a bar under the table shows their count and size and offers Download, Copy, Cut, Delete and Clear selection. Esc clears the selection.
+- Drag down the check boxes to add the rows you pass to the selection, or drag from the blank space below the rows to select them with a rectangle. Hold Ctrl (⌘ on macOS) while drawing the rectangle to keep the current selection. A click in the blank space clears the selection.
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- Large upload and download batches now report their full result even after older tasks leave the history, so an early failure is no longer hidden.
+- Skipped files no longer count as uploaded or downloaded in completion notifications.
+- Command-line summaries no longer undercount bulk operations with more than 10,000 results.
+- Saved sync jobs select their own account when several accounts are configured.
+- Upload mirrors preserve remote objects below skipped local directory links, allowing the remaining sync actions to run.
+- Skipping an existing compressed upload no longer compresses the source or asks for its ZIP password.
+- The command line respects `--` before paths beginning with a dash.
+
+## [0.3.1] - 2026-10-23
+
+### Added
+
+- Image previews in the inspector can be zoomed up to 8 times with a touchpad pinch, Ctrl and the mouse wheel, or the zoom buttons. A zoomed image pans by dragging or scrolling; double-click it to fit the panel again.
+
+### Changed
+
+- Sorting large object lists uses less temporary memory for names containing ASCII uppercase letters.
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- Completed tasks no longer retain their data after being evicted from the task history.
+
+## [0.3.0] - 2026-10-21
+
+### Added
+
+- While tasks are queued or running, the taskbar button on Windows (the Dock icon on macOS) shows their combined progress.
+
+### Changed
+
+- Each notch of the mouse wheel now scrolls smoothly over a short moment instead of jumping. Touchpad scrolling is unchanged, and with the system "reduce motion" setting on, the wheel scrolls at once.
+
+## [0.2.0] - 2026-10-20
+
+### Added
+
+- Dialogs, the command palette, menus and toasts now animate in and out. Buttons and list rows fade on hover, the transfers panel opens and closes smoothly, and progress bars and counts change gradually.
+- With the system "reduce motion" setting on, nothing moves or scales. Only colours and opacity fade.
+
+### Changed
+
+- Release archives contain only the executables, the platform launch files and the license. The READMEs stay in the repository and the online documentation.
+- On Windows and Linux, the context menus of objects and buckets and the menus of the Upload, account and "⋯" buttons are drawn inside the window instead of as system menus. They show command icons and shortcuts, and open submenus on hover or with the arrow keys. They can be used entirely from the keyboard, and Shift+F10 or the menu key opens a context menu below the current row. macOS keeps the system menus.
+- Dialogs, the command palette, select popups and toasts share one look. The current choice in a list is marked with a check and bold text instead of a blue fill, and shortcuts are drawn as key caps.
+- "Select all" uses a double-check icon so it is not confused with the check that marks the current choice.
+
+### Fixed
+
+- The counts at the bottom of the window no longer jitter. While a folder is loading, its item count changes at once instead of rolling with every page, digits no longer spill above the status bar, and the collapsed transfers strip rolls each of its three counts separately.
+- Inspector: the standard header labels (Content-Type, Cache-Control and so on) showed only an ellipsis next to the "?" icon. They now show the full name unless the panel is too narrow.
+- Resizing the window no longer makes the search box, toolbar labels, path bar or object table columns lag behind or flicker.
+- The sidebar and the inspector keep the width you set when the window is narrower than 1100 px.
+
+## [0.1.0] - 2026-10-20
+
+First release of Pail.
+
+### Added
+
+- **Desktop app** (`pail-desktop`) for Windows, Linux and macOS: sidebar with account switcher and bucket list, breadcrumbs, a sortable multi-select object table with automatic paging, search, flat view, inspector, transfers panel, status bar, command palette (`Ctrl/⌘+K`), context menus and shortcuts, light and dark themes, English and 简体中文, and a `--demo` mode that runs on an in-memory S3 server.
+- **Accounts**: any number of AWS and S3-compatible accounts (custom endpoint, region, path-style, access keys, AWS profile, default credential chain, anonymous, AssumeRole), a connection test and a checksum mode per account. Tested by hand on Amazon S3, Cloudflare R2, Wasabi, MinIO and a self-hosted VersityGW.
+- **Browsing and preview**: bucket and folder navigation, JSON, CSV, XML, text, image and hex preview, and copying the key, URI, URL or presigned URL.
+- **Transfers**: upload and download files, folders, versions and whole buckets, with drag and drop. Uploads, downloads and other tasks run in separate queues with configurable limits, and can be cancelled and retried. There are five conflict policies, large files are transferred in parts, and a download appears at its final path only after it has been verified.
+- **Object management**: copy, move and rename within a bucket or across buckets; bulk delete with a result for each item; edit headers, metadata, tags, ACL, storage class and server-side encryption (SSE-S3, SSE-KMS, SSE-C), then check the result; a MIME type table.
+- **Versions**: list versions and delete markers, restore a version or deleted keys, download and permanently delete several versions.
+- **Buckets**: create, delete and empty; copy, move or download a whole bucket; 14 bucket settings as forms or JSON; list and abort incomplete multipart uploads.
+- **Sync jobs**: upload, download and mirror, with a preview, three compare modes and exclude globs. Local deletions go to the OS trash.
+- **Upload rules**: headers, storage class, encryption and compression (GZIP, ZIP, AES-256 ZIP with levels), decoded again on download.
+- **CDN domain per account** (a base URL or a `{bucket}`/`{key}` template, with an optional bucket list), a presigned URL dialog, and CloudFront distributions and invalidations for AWS accounts.
+- **Command line** (`pail`): `accounts`, `buckets`, `ls`, `cp`, `mv`, `rm`, `mb`, `rb`, `presign`, `url`, `versions`, `restore`, `sync` and `vault status`, with JSON output and fixed exit codes. It shares accounts and sync jobs with the app. See [docs/cli.md](docs/cli.md).
+- **Compatibility with openS3**: an existing `openS3` configuration folder and keychain entries are migrated automatically, and older vaults and `opens3-*` object metadata are still read.
+
+### Security
+
+- Secrets are stored in the OS keychain or in an optional encrypted vault with idle auto-lock, not in configuration files.
+- The diagnostic log is off until you turn it on. It redacts URL query strings, Authorization headers, signatures and known secret values.
+- Every destructive or bulk action shows its scope and asks for confirmation.
+
+### Known limitations
+
+- The macOS app was run by hand on Apple silicon and Intel Macs. It has no developer signature and is not notarized, so before the first launch run `xattr -dr com.apple.quarantine` on the downloaded app.
+- AWS AssumeRole and CloudFront have not been tested against a real AWS account.
+- SSE-S3, SSE-KMS and SSE-C uploads, and moving local files to the real OS trash during a sync, have not been checked end to end.
+- A proxy that decompresses gzip responses makes the size of a gzip-encoded object differ from what the server reports. Pail refuses such a download and writes no file.
+- `size_time` sync can miss an edit that keeps the file size. Checksum sync transfers objects again when they have no `pail-sha256` metadata.
+- Task titles and the command line are not translated.
